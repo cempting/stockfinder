@@ -44,6 +44,8 @@ The application opens at <http://localhost:8501> by default.
 - Composable market, classification, price, setup, trend, and risk filters
 - Optional cached fundamental enrichment for narrowed stock shortlists
 - Always-on 1-week, 1-month, 3-month, and 6-month industry liquidity analysis
+- Secondary early-rotation signal for breadth, relative strength, dollar volume,
+  and close-location pressure
 - Composite liquidity-flow heatmap with all four horizons in each industry
 - Winning/losing industry pulse with region-aware rotation filtering
 - Heartbeat consolidation screening above a rising SMA150

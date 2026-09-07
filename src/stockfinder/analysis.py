@@ -36,6 +36,23 @@ class AnalysisResult:
     swing_low: float
 
 
+def _average_true_range(history: pd.DataFrame, periods: int = 14) -> float:
+    previous_close = history["Close"].shift(1)
+    true_range = pd.concat(
+        [
+            history["High"] - history["Low"],
+            (history["High"] - previous_close).abs(),
+            (history["Low"] - previous_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    return float(true_range.rolling(periods).mean().iloc[-1])
+
+
+def _recent_swing_low(history: pd.DataFrame, periods: int = 20) -> float:
+    return float(history["Low"].tail(periods).min())
+
+
 def analyze_security(symbol: str) -> AnalysisResult:
     """Build independent quality, risk, and technical scores for a symbol."""
     normalized_symbol = symbol.strip().upper()
@@ -48,18 +65,8 @@ def analyze_security(symbol: str) -> AnalysisResult:
     technical = score_technicals(history)
     close = history["Close"]
     daily_change = float(close.pct_change().iloc[-1] * 100) if len(close) > 1 else 0.0
-
-    previous_close = close.shift(1)
-    true_range = pd.concat(
-        [
-            history["High"] - history["Low"],
-            (history["High"] - previous_close).abs(),
-            (history["Low"] - previous_close).abs(),
-        ],
-        axis=1,
-    ).max(axis=1)
-    atr = float(true_range.rolling(14).mean().iloc[-1])
-    swing_low = float(history["Low"].tail(20).min())
+    atr = _average_true_range(history)
+    swing_low = _recent_swing_low(history)
     analysis = SecurityAnalysis(normalized_symbol, quality, risk, technical)
     return AnalysisResult(
         analysis,
@@ -88,16 +95,7 @@ def build_market_risk_profiles(
         returns = close.pct_change().dropna()
         volatility = float(returns.std() * np.sqrt(252) * 100)
         drawdown = close / close.cummax() - 1
-        previous_close = close.shift(1)
-        true_range = pd.concat(
-            [
-                frame["High"] - frame["Low"],
-                (frame["High"] - previous_close).abs(),
-                (frame["Low"] - previous_close).abs(),
-            ],
-            axis=1,
-        ).max(axis=1)
-        atr = float(true_range.rolling(14).mean().iloc[-1])
+        atr = _average_true_range(frame)
         latest = float(close.iloc[-1])
         metrics = risk_metrics(frame, {})
         risk = score_risk(metrics)
@@ -110,7 +108,7 @@ def build_market_risk_profiles(
                 "Max drawdown %": round(float(drawdown.min() * 100), 1),
                 "ATR14": atr,
                 "ATR %": round(atr / latest * 100, 1),
-                "Swing low": float(frame["Low"].tail(20).min()),
+                "Swing low": _recent_swing_low(frame),
                 "Market risk": risk.value,
                 "Risk label": risk.label,
                 "Risk data %": risk.completeness,
@@ -402,6 +400,119 @@ def rank_stocks_by_mansfield(
     )
 
 
+def early_rotation_evidence(
+    histories: dict[str, pd.DataFrame], benchmark_close: pd.Series
+) -> dict[str, float | str]:
+    """Detect early accumulation independently of established price momentum."""
+    usable = {
+        symbol: history.dropna(subset=["Close", "Volume"])
+        for symbol, history in histories.items()
+        if {"Close", "Volume"}.issubset(history.columns)
+        and len(history.dropna(subset=["Close", "Volume"])) >= 50
+    }
+    if not usable:
+        return {
+            "Early rotation score": 0.0,
+            "Early rotation signal": "Unavailable",
+            "Breadth acceleration": 0.0,
+            "RS inflection": 0.0,
+            "Positive dollar volume": 0.0,
+            "Close pressure": 0.0,
+        }
+
+    current_breadth = []
+    prior_breadth = []
+    dollar_volume_scores = []
+    close_pressure_scores = []
+    for history in usable.values():
+        close = history["Close"]
+        volume = history["Volume"]
+        sma20 = close.rolling(20).mean()
+        current_breadth.append(bool(close.iloc[-1] > sma20.iloc[-1]))
+        prior_breadth.append(bool(close.iloc[-11] > sma20.iloc[-11]))
+
+        recent_dollar_volume = float((close * volume).tail(5).mean())
+        baseline_dollar_volume = float((close * volume).iloc[-45:-5].mean())
+        volume_change = (
+            (recent_dollar_volume / baseline_dollar_volume - 1) * 100
+            if baseline_dollar_volume > 0
+            else 0.0
+        )
+        five_day_return = _period_return(close, 5)
+        signed_volume_change = (
+            volume_change if five_day_return > 0 else -abs(volume_change)
+        )
+        dollar_volume_scores.append(_normalize(signed_volume_change, -30, 100))
+
+        if {"High", "Low"}.issubset(history.columns):
+            recent = history.tail(10)
+            day_range = (recent["High"] - recent["Low"]).replace(0, np.nan)
+            close_location = (
+                ((recent["Close"] - recent["Low"]) / day_range)
+                .clip(0, 1)
+                .dropna()
+            )
+            weights = (recent["Close"] * recent["Volume"]).reindex(
+                close_location.index
+            )
+            close_pressure_scores.append(
+                float(np.average(close_location, weights=weights) * 100)
+                if not close_location.empty and float(weights.sum()) > 0
+                else 50.0
+            )
+        else:
+            recent_close = close.tail(20)
+            price_range = float(recent_close.max() - recent_close.min())
+            close_pressure_scores.append(
+                (float(close.iloc[-1] - recent_close.min()) / price_range * 100)
+                if price_range > 0
+                else 50.0
+            )
+
+    breadth_change = (
+        float(np.mean(current_breadth) - np.mean(prior_breadth)) * 100
+    )
+    breadth_score = _normalize(breadth_change, -20, 30)
+
+    industry_close = _aggregate_industry_history(usable)["Close"]
+    aligned = pd.concat(
+        [industry_close.rename("industry"), benchmark_close.rename("benchmark")],
+        axis=1,
+    ).dropna()
+    if len(aligned) >= 31:
+        relative = aligned["industry"] / aligned["benchmark"]
+        recent_relative_return = _period_return(relative, 10)
+        prior_relative_return = float(
+            (relative.iloc[-11] / relative.iloc[-31] - 1) * 100
+        )
+        relative_inflection = recent_relative_return - prior_relative_return
+        relative_score = _normalize(relative_inflection, -5, 8)
+    else:
+        relative_score = 50.0
+
+    components = {
+        "Breadth acceleration": breadth_score,
+        "RS inflection": relative_score,
+        "Positive dollar volume": float(np.mean(dollar_volume_scores)),
+        "Close pressure": float(np.mean(close_pressure_scores)),
+    }
+    score = float(np.mean(list(components.values())))
+    confirmations = sum(value >= 60 for value in components.values())
+    if score >= 65 and confirmations >= 3:
+        signal = "Emerging"
+    elif score >= 55 and confirmations >= 2:
+        signal = "Building"
+    elif score < 35 and confirmations == 0:
+        signal = "Fading"
+    else:
+        signal = "Neutral"
+    return {
+        "Early rotation score": round(score, 1),
+        "Early rotation signal": signal,
+        **{name: round(value, 1) for name, value in components.items()},
+    }
+
+
 def broad_rotation_scan(
     universe: pd.DataFrame,
     histories: dict[str, pd.DataFrame],
@@ -409,6 +520,16 @@ def broad_rotation_scan(
     """Aggregate all stocks across weekly through six-month liquidity horizons."""
     windows = {"1W": 5, "1M": 21, "3M": 63, "6M": 126}
     industry_rows = []
+    market_histories = {
+        symbol: history
+        for symbol, history in histories.items()
+        if len(history) >= 170 and {"Close", "Volume"}.issubset(history.columns)
+    }
+    benchmark_close = (
+        _aggregate_industry_history(market_histories)["Close"]
+        if market_histories
+        else pd.Series(dtype=float)
+    )
     group_columns = [
         column for column in ("Region", "Sector", "Industry") if column in universe
     ]
@@ -491,6 +612,9 @@ def broad_rotation_scan(
                 breadth,
             ]
         )
+        early_rotation = early_rotation_evidence(
+            member_histories, benchmark_close
+        )
         representative = members.iloc[0]
         sector = str(representative["Sector"])
         industry = str(representative["Industry"])
@@ -523,6 +647,7 @@ def broad_rotation_scan(
                 "Above rising SMA150 %": round(float(breadth), 1),
                 "Rotation score": round(float(score), 1),
                 "Winning": uptrend and confirmations >= 3 and breadth >= 50,
+                **early_rotation,
             }
         )
     industries = pd.DataFrame(industry_rows)
@@ -632,16 +757,7 @@ def analyze_long_swing_setup(history: pd.DataFrame) -> SwingSetup:
     sma50 = close.rolling(50).mean()
     sma150 = close.rolling(150).mean()
     volume50 = frame["Volume"].rolling(50).mean()
-    previous_close = close.shift(1)
-    true_range = pd.concat(
-        [
-            frame["High"] - frame["Low"],
-            (frame["High"] - previous_close).abs(),
-            (frame["Low"] - previous_close).abs(),
-        ],
-        axis=1,
-    ).max(axis=1)
-    atr = float(true_range.rolling(14).mean().iloc[-1])
+    atr = _average_true_range(frame)
 
     base_length, base = _select_consolidation_base(frame)
     base_high = float(base["High"].max())
@@ -845,7 +961,9 @@ def normalized_performance(symbols: list[str], period: str = "6mo") -> pd.DataFr
     """Return aligned growth-of-100 series for comparison charts."""
     series = {}
     for symbol in symbols:
-        close = get_history(symbol, period).data["Close"]
+        close = get_history(symbol, period).data["Close"].copy()
+        if isinstance(close.index, pd.DatetimeIndex):
+            close.index = close.index.tz_localize(None).normalize()
         series[symbol] = close / close.iloc[0] * 100
     return pd.DataFrame(series).dropna(how="all")
 

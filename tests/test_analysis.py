@@ -11,6 +11,16 @@ def _history(prices: np.ndarray, volumes: np.ndarray) -> pd.DataFrame:
     return pd.DataFrame({"Close": prices, "Volume": volumes})
 
 
+def test_price_risk_helpers_preserve_atr_and_recent_swing_low() -> None:
+    close = np.arange(100.0, 130.0)
+    history = pd.DataFrame(
+        {"High": close + 2, "Low": close - 1, "Close": close}
+    )
+
+    assert analysis._average_true_range(history) == 3.0
+    assert analysis._recent_swing_low(history) == 109.0
+
+
 def test_six_month_liquidity_favors_accumulation_over_distribution() -> None:
     sessions = 126
     accumulating = _history(
@@ -181,6 +191,28 @@ def test_mansfield_ranks_industry_outperformer_first() -> None:
     assert ranked.iloc[1]["Mansfield RS"] < 0
 
 
+def test_normalized_performance_aligns_mixed_timezone_histories(monkeypatch) -> None:
+    naive_dates = pd.bdate_range("2026-01-01", periods=60)
+    aware_dates = naive_dates.tz_localize("America/New_York")
+    histories = {
+        "NAIVE": pd.DataFrame({"Close": np.linspace(100, 120, 60)}, index=naive_dates),
+        "AWARE": pd.DataFrame({"Close": np.linspace(80, 100, 60)}, index=aware_dates),
+    }
+    monkeypatch.setattr(
+        analysis,
+        "get_history",
+        lambda symbol, period: DataResult(
+            histories[symbol], "Test data", pd.Timestamp.now()
+        ),
+    )
+
+    performance = analysis.normalized_performance(["NAIVE", "AWARE"])
+
+    assert list(performance.columns) == ["NAIVE", "AWARE"]
+    assert len(performance) == 60
+    assert performance.index.tz is None
+
+
 def test_broad_rotation_excludes_downward_industry() -> None:
     dates = pd.bdate_range("2025-01-01", periods=220)
     universe = pd.DataFrame(
@@ -227,7 +259,65 @@ def test_broad_rotation_excludes_downward_industry() -> None:
         "Liquidity change",
         "Recent flow %",
         "Rotation state",
+        "Early rotation score",
+        "Early rotation signal",
+        "Breadth acceleration",
+        "RS inflection",
+        "Positive dollar volume",
+        "Close pressure",
     }.issubset(industries.columns)
+
+
+def test_early_rotation_detects_broad_accumulation_before_established_trend() -> None:
+    dates = pd.bdate_range("2025-01-01", periods=180)
+    baseline = np.full(170, 100.0)
+    emerging = np.concatenate([baseline, np.linspace(100, 112, 10)])
+    histories = {
+        symbol: pd.DataFrame(
+            {
+                "Close": emerging,
+                "High": emerging + 1.0,
+                "Low": emerging - 3.0,
+                "Volume": np.concatenate(
+                    [np.full(175, 1_000_000), np.full(5, 3_000_000)]
+                ),
+            },
+            index=dates,
+        )
+        for symbol in ("EARLY1", "EARLY2")
+    }
+    benchmark = pd.Series(np.full(len(dates), 100.0), index=dates)
+
+    evidence = analysis.early_rotation_evidence(histories, benchmark)
+
+    assert evidence["Early rotation signal"] == "Emerging"
+    assert evidence["Early rotation score"] >= 65
+    assert evidence["Breadth acceleration"] >= 60
+    assert evidence["Positive dollar volume"] >= 60
+    assert evidence["Close pressure"] >= 60
+
+
+def test_early_rotation_does_not_reward_volume_during_price_decline() -> None:
+    dates = pd.bdate_range("2025-01-01", periods=180)
+    falling = np.concatenate([np.full(170, 100.0), np.linspace(100, 85, 10)])
+    history = pd.DataFrame(
+        {
+            "Close": falling,
+            "High": falling + 3.0,
+            "Low": falling - 1.0,
+            "Volume": np.concatenate(
+                [np.full(175, 1_000_000), np.full(5, 3_000_000)]
+            ),
+        },
+        index=dates,
+    )
+
+    evidence = analysis.early_rotation_evidence(
+        {"FALLING": history}, pd.Series(100.0, index=dates)
+    )
+
+    assert evidence["Positive dollar volume"] < 50
+    assert evidence["Early rotation signal"] != "Emerging"
 
 
 def test_broad_rotation_keeps_same_industry_separate_by_region() -> None:

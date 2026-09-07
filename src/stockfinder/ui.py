@@ -1,5 +1,6 @@
 """Streamlit user interface for Stockfinder."""
 
+from collections.abc import MutableMapping
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
@@ -21,12 +22,7 @@ from stockfinder.analysis import (
     calculate_position_plan,
     calculate_reward_risk,
     classify_market_regime,
-    industry_rotation,
     normalized_performance,
-    rank_sector_stocks,
-    rank_stocks_by_mansfield,
-    sector_rotation,
-    universe_group_scores,
 )
 from stockfinder.data import (
     INDUSTRY_ETFS,
@@ -41,20 +37,32 @@ from stockfinder.data import (
     get_batch_histories,
     get_global_universe,
     get_history,
-    get_market_universe,
-    get_nasdaq_universe,
     get_news,
     get_profile,
 )
-from stockfinder.models import Score
+from stockfinder.models import Score, SwingSetup
 from stockfinder.scoring import score_fundamentals
 from stockfinder.storage import Repository, ScanSnapshot, ScanSnapshotStore
 
 ROOT = Path(__file__).resolve().parents[2]
-MARKET_SCAN_VERSION = "2026-09-global-listings-v10"
-ROTATION_MODEL_VERSION = "legacy-sector"
-INDUSTRY_MODEL_VERSION = "legacy-industry"
-STOCK_RANKING_MODEL_VERSION = "legacy-stock"
+MARKET_SCAN_VERSION = "2026-09-early-rotation-v11"
+WORKSPACE_PAGES = (
+    "Market pulse",
+    "Rotation leaders",
+    "Metals",
+    "Stocks",
+    "Portfolio",
+    "Methodology",
+)
+WORKSPACE_LABELS = {
+    "Market pulse": "Overview",
+    "Rotation leaders": "Industries",
+    "Metals": "Metals",
+    "Stocks": "Stocks",
+    "Portfolio": "Portfolio",
+    "Methodology": "Methodology",
+}
+STOCKS_VIEWS = ("Discover", "Research", "Watchlist")
 
 
 @st.cache_resource
@@ -123,44 +131,6 @@ def cached_history_chunk(
     return get_batch_histories(symbols, period)
 
 
-@st.cache_data(ttl=60 * 60 * 24, show_spinner=False)
-def cached_nasdaq_universe(day_key: str) -> DataResult:
-    return get_nasdaq_universe(date.fromisoformat(day_key))
-
-
-@st.cache_data(ttl=60 * 60 * 24, show_spinner=False)
-def cached_market_universe(name: str, day_key: str) -> DataResult:
-    return get_market_universe(name, date.fromisoformat(day_key))
-
-
-@st.cache_data(ttl=60 * 60 * 24, show_spinner=False)
-def cached_mansfield_ranking(
-    symbols: tuple[str, ...], names: tuple[tuple[str, str], ...]
-) -> tuple[pd.DataFrame, str | None]:
-    histories = get_batch_histories(symbols)
-    return rank_stocks_by_mansfield(histories.data, dict(names)), histories.warning
-
-
-@st.cache_data(ttl=60 * 60 * 6, show_spinner=False)
-def cached_sector_rotation(model_version: str) -> pd.DataFrame:
-    del model_version
-    return sector_rotation()
-
-
-@st.cache_data(ttl=60 * 60 * 6, show_spinner=False)
-def cached_industry_rotation(sector: str, model_version: str) -> pd.DataFrame:
-    del model_version
-    return industry_rotation(sector)
-
-
-@st.cache_data(ttl=60 * 60 * 6, show_spinner=False)
-def cached_sector_stocks(
-    sector: str, industry: str, model_version: str
-) -> pd.DataFrame:
-    del model_version
-    return rank_sector_stocks(sector, industry)
-
-
 def main() -> None:
     st.set_page_config(
         page_title="Stockfinder",
@@ -169,7 +139,8 @@ def main() -> None:
         initial_sidebar_state="auto",
     )
     _theme()
-    page, risk_profile, load_mode = _sidebar()
+    _consume_pending_navigation(st.session_state)
+    page, load_mode = _sidebar()
 
     if page == "Market pulse":
         _market_page(load_mode)
@@ -178,41 +149,37 @@ def main() -> None:
     elif page == "Metals":
         _metals_page()
     elif page == "Stocks":
-        _stocks_page(risk_profile, load_mode)
+        _stocks_page(load_mode)
     elif page == "Portfolio":
         _portfolio_page()
     else:
-        _methodology_page(risk_profile, load_mode)
+        _methodology_page(load_mode)
 
 
-def _sidebar() -> tuple[str, str, str]:
+def _consume_pending_navigation(state: MutableMapping[str, Any]) -> None:
+    pending_routes = (
+        ("pending_workspace_page", "workspace_page", WORKSPACE_PAGES),
+        ("pending_stocks_workspace_view", "stocks_workspace_view", STOCKS_VIEWS),
+    )
+    for pending_key, active_key, valid_values in pending_routes:
+        pending_value = state.pop(pending_key, None)
+        if pending_value in valid_values:
+            state[active_key] = pending_value
+
+
+def _sidebar() -> tuple[str, str]:
     with st.sidebar:
         st.markdown('<div class="brand">STOCKFINDER</div>', unsafe_allow_html=True)
         st.caption("Evidence-led market research")
-        pending_page = st.session_state.pop("pending_workspace_page", None)
-        if pending_page:
-            st.session_state["workspace_page"] = pending_page
-        pages = [
-            "Market pulse",
-            "Rotation leaders",
-            "Metals",
-            "Stocks",
-            "Portfolio",
-            "Methodology",
-        ]
-        if st.session_state.get("workspace_page") not in pages:
+        if st.session_state.get("workspace_page") not in WORKSPACE_PAGES:
             st.session_state["workspace_page"] = "Market pulse"
         page = st.radio(
-            "Workspace",
-            pages,
+            "Navigate",
+            WORKSPACE_PAGES,
             key="workspace_page",
+            format_func=WORKSPACE_LABELS.get,
         )
         st.divider()
-        risk_profile = st.segmented_control(
-            "Risk profile",
-            ["Conservative", "Balanced", "Aggressive"],
-            default="Balanced",
-        )
         with st.expander("Data controls"):
             extended = st.toggle(
                 "Extended loading",
@@ -229,7 +196,7 @@ def _sidebar() -> tuple[str, str, str]:
                 "Extended: 2 years / 100-symbol batches"
             )
         st.caption("Daily data · refreshed after market close")
-    return page, risk_profile or "Balanced", "extended" if extended else "standard"
+    return page, "extended" if extended else "standard"
 
 
 def _metals_page() -> None:
@@ -261,7 +228,7 @@ def _metals_page() -> None:
     leader_column.metric(
         "Composite leader",
         str(leader["Metal"]),
-        f"{leader['Metal score']:.0f}/100 · {leader['Signal']}",
+        f"{_score_10(leader['Metal score']):.1f}/10 · {leader['Signal']}",
     )
     month_column.metric(
         "Strongest 1M",
@@ -280,8 +247,17 @@ def _metals_page() -> None:
         st.plotly_chart(
             _metals_performance_chart(result.data, ranked), width="stretch"
         )
+        metal_score_columns = (
+            "Momentum",
+            "Trend",
+            "Relative strength",
+            "Participation",
+            "Risk resilience",
+            "Metal score",
+        )
+        ranked_display = _display_score_columns(ranked, metal_score_columns)
         st.dataframe(
-            ranked,
+            ranked_display,
             hide_index=True,
             width="stretch",
             column_config={
@@ -296,18 +272,13 @@ def _metals_page() -> None:
                 "Max drawdown %": st.column_config.NumberColumn(format="%.1f%%"),
                 **{
                     column: st.column_config.ProgressColumn(
-                        min_value=0, max_value=100
+                        min_value=1, max_value=10, format="%.1f"
                     )
-                    for column in (
-                        "Momentum",
-                        "Trend",
-                        "Relative strength",
-                        "Participation",
-                        "Risk resilience",
-                        "Metal score",
-                        "Data completeness %",
-                    )
+                    for column in metal_score_columns
                 },
+                "Data completeness %": st.column_config.ProgressColumn(
+                    min_value=0, max_value=100, format="%.0f%%"
+                ),
             },
         )
 
@@ -318,7 +289,7 @@ def _metals_page() -> None:
         score_column, price_column, relative_column, risk_column = st.columns(4)
         score_column.metric(
             "Metal score",
-            f"{selected['Metal score']:.0f}/100",
+            f"{_score_10(selected['Metal score']):.1f}/10",
             str(selected["Signal"]),
         )
         price_column.metric(
@@ -332,7 +303,7 @@ def _metals_page() -> None:
         )
         risk_column.metric(
             "Risk resilience",
-            f"{selected['Risk resilience']:.0f}/100",
+            f"{_score_10(selected['Risk resilience']):.1f}/10",
             f"{selected['Volatility %']:.1f}% volatility",
         )
         st.write(_metal_summary(selected))
@@ -341,7 +312,11 @@ def _metals_page() -> None:
         )
         evidence = pd.DataFrame(
             [
-                (pillar, selected[pillar], _score_context(selected[pillar]))
+                (
+                    pillar,
+                    _score_10(selected[pillar]),
+                    _score_context(selected[pillar]),
+                )
                 for pillar in (
                     "Momentum",
                     "Trend",
@@ -357,7 +332,9 @@ def _metals_page() -> None:
             hide_index=True,
             width="stretch",
             column_config={
-                "Score": st.column_config.ProgressColumn(min_value=0, max_value=100)
+                "Score": st.column_config.ProgressColumn(
+                    min_value=1, max_value=10, format="%.1f"
+                )
             },
         )
 
@@ -442,18 +419,16 @@ def _metal_summary(metal: pd.Series) -> str:
     )
 
 
-def _stocks_page(risk_profile: str, load_mode: str) -> None:
-    pending_view = st.session_state.pop("pending_stocks_workspace_view", None)
-    if pending_view:
-        st.session_state["stocks_workspace_view"] = pending_view
+def _stocks_page(load_mode: str) -> None:
+    if st.session_state.get("stocks_workspace_view") not in STOCKS_VIEWS:
+        st.session_state["stocks_workspace_view"] = "Discover"
     view = st.segmented_control(
         "Stocks workspace",
-        ["Discover", "Research", "Watchlist"],
-        default="Discover",
+        STOCKS_VIEWS,
         key="stocks_workspace_view",
     )
     if view == "Research":
-        _research_page(risk_profile)
+        _research_page()
     elif view == "Watchlist":
         _watchlist_page()
     else:
@@ -461,7 +436,6 @@ def _stocks_page(risk_profile: str, load_mode: str) -> None:
 
 
 def _stocks_discovery_page(load_mode: str) -> None:
-    _journey_progress(3)
     _heading(
         "Stocks",
         "Filter the global market, rank setup evidence, and open full research",
@@ -528,10 +502,12 @@ def _stocks_discovery_page(load_mode: str) -> None:
             "$50B": 50e9,
         }[cap_label]
         setup_score_column, risk_column, volatility_column = st.columns(3)
-        minimum_setup = setup_score_column.slider(
-            "Minimum setup score", 0, 100, 50, 5
+        minimum_setup_display = setup_score_column.slider(
+            "Minimum setup score", 1, 10, 5, 1
         )
-        maximum_risk = risk_column.slider("Maximum market risk", 0, 100, 80, 5)
+        minimum_safety = risk_column.slider("Minimum safety score", 1, 10, 2, 1)
+        minimum_setup = _raw_score_threshold(minimum_setup_display)
+        maximum_risk = _raw_risk_limit(minimum_safety)
         maximum_volatility = volatility_column.slider(
             "Maximum annualized volatility %", 10, 200, 100, 5
         )
@@ -558,13 +534,13 @@ def _stocks_discovery_page(load_mode: str) -> None:
     )
     sort_label = st.selectbox(
         "Rank by",
-        ["Setup score", "Market cap", "Day performance", "Lowest risk"],
+        ["Setup score", "Market cap", "Day performance", "Highest safety"],
     )
     sort_column, ascending = {
         "Setup score": ("Setup score", False),
         "Market cap": ("Market cap", False),
         "Day performance": ("Day %", False),
-        "Lowest risk": ("Market risk", True),
+        "Highest safety": ("Market risk", True),
     }[sort_label]
     filtered = filtered.sort_values(
         sort_column, ascending=ascending, na_position="last"
@@ -587,6 +563,11 @@ def _stocks_discovery_page(load_mode: str) -> None:
         with st.spinner(f"Loading fundamentals for {len(symbols)} stocks..."):
             fundamentals = cached_candidate_fundamentals(symbols)
         display = display.merge(fundamentals, on="Symbol", how="left")
+    display = _display_score_columns(
+        display,
+        ("Setup score", "Quality", "Growth", "Financial strength", "Valuation"),
+        ("Market risk",),
+    ).rename(columns={"Market risk": "Safety", "Risk label": "Risk level"})
 
     selection = st.dataframe(
         display,
@@ -637,10 +618,12 @@ def _stock_discovery_frame(
 
 def _stock_discovery_columns() -> dict[str, object]:
     progress = {
-        column: st.column_config.ProgressColumn(min_value=0, max_value=100)
+        column: st.column_config.ProgressColumn(
+            min_value=1, max_value=10, format="%.1f"
+        )
         for column in (
             "Setup score",
-            "Market risk",
+            "Safety",
             "Quality",
             "Growth",
             "Financial strength",
@@ -674,114 +657,6 @@ def _force_market_refresh() -> None:
     clear_market_data_caches()
 
 
-def _market_universe_analysis_page(name: str) -> None:
-    _heading(
-        f"{name} analysis",
-        "Universe → sector → industry → Mansfield-ranked stocks",
-    )
-    with st.spinner(f"Refreshing {name} membership and classifications..."):
-        result = cached_market_universe(name, date.today().isoformat())
-    universe = result.data
-    if result.warning:
-        st.warning(result.warning)
-    st.caption(
-        f"Source: {result.source} · retrieved "
-        f"{result.retrieved_at.strftime('%Y-%m-%d %H:%M UTC')}"
-    )
-
-    total, sector_count, industry_count = st.columns(3)
-    total.metric("Stocks", f"{len(universe):,}")
-    sector_count.metric("Sectors", f"{universe['Sector'].nunique():,}")
-    industry_count.metric("Industries", f"{universe['Industry'].nunique():,}")
-
-    sector_scores = universe_group_scores(universe, "Sector")
-    st.subheader("Sector participation")
-    st.dataframe(
-        sector_scores,
-        hide_index=True,
-        width="stretch",
-        column_config=_participation_columns(),
-    )
-    sectors = sector_scores["Sector"].tolist()
-    sector = st.selectbox("Open sector", sectors, key=f"universe_sector_{name}")
-
-    sector_members = universe[universe["Sector"] == sector]
-    industry_scores = universe_group_scores(sector_members, "Industry")
-    st.subheader(f"{sector} industries")
-    st.dataframe(
-        industry_scores,
-        hide_index=True,
-        width="stretch",
-        column_config=_participation_columns(),
-    )
-    industries = industry_scores["Industry"].tolist()
-    industry = st.selectbox(
-        "Open industry",
-        industries,
-        key=f"universe_industry_{name}_{sector}",
-    )
-
-    members = sector_members[sector_members["Industry"] == industry]
-    symbols = tuple(members["Symbol"].tolist())
-    names = tuple(zip(members["Symbol"], members["Name"], strict=True))
-    with st.spinner(
-        f"Calculating weekly Mansfield RS for {len(symbols):,} {industry} stocks..."
-    ):
-        stocks, history_warning = cached_mansfield_ranking(symbols, names)
-    st.subheader(f"{industry} stocks")
-    st.caption(
-        "Mansfield RS compares each stock with an equal-weight index of this "
-        "industry and its trailing 52-week relative-ratio average."
-    )
-    if history_warning:
-        st.warning(history_warning)
-    if stocks.empty:
-        st.info("No members have enough usable history for Mansfield ranking.")
-        return
-    selection = st.dataframe(
-        stocks,
-        hide_index=True,
-        width="stretch",
-        row_height=82,
-        key=f"universe_stocks_{name}_{sector}_{industry}",
-        on_select="rerun",
-        selection_mode="single-row",
-        column_config={
-            "Price · SMA50": st.column_config.ImageColumn(
-                width=260,
-                help="Two-year price history (green) and SMA50 (amber).",
-            ),
-            "Price": st.column_config.NumberColumn(format="$%.2f"),
-            "Mansfield RS": st.column_config.NumberColumn(format="%.2f"),
-            "Technical": st.column_config.ProgressColumn(min_value=0, max_value=100),
-        },
-    )
-    selected_rows = _selected_rows(selection)
-    selected_symbol = (
-        str(stocks.iloc[selected_rows[0]]["Symbol"]) if selected_rows else None
-    )
-    selection_id = (name, sector, industry, selected_symbol)
-    if not selected_symbol:
-        st.session_state.pop("processed_universe_candidate", None)
-    elif st.session_state.get("processed_universe_candidate") != selection_id:
-        st.session_state["processed_universe_candidate"] = selection_id
-        st.session_state["research_symbol"] = selected_symbol
-        st.session_state["pending_stocks_workspace_view"] = "Research"
-        st.session_state["pending_workspace_page"] = "Stocks"
-        st.rerun()
-
-
-def _participation_columns():
-    return {
-        "Day %": st.column_config.NumberColumn(format="%.2f%%"),
-        "Advancing %": st.column_config.NumberColumn(format="%.1f%%"),
-        "Market cap": st.column_config.NumberColumn(format="$%.0f"),
-        "Participation score": st.column_config.ProgressColumn(
-            min_value=0, max_value=100
-        ),
-    }
-
-
 def _rotation_change_columns():
     return {
         "Momentum change": st.column_config.NumberColumn(
@@ -800,316 +675,29 @@ def _rotation_change_columns():
     }
 
 
-def _nasdaq_universe_page() -> None:
-    _heading(
-        "NASDAQ universe",
-        "Daily public listing approximation · no liquidity exclusions",
-    )
-    with st.spinner("Refreshing the public NASDAQ stock universe..."):
-        result = cached_nasdaq_universe(date.today().isoformat())
-    universe = result.data
-    if result.is_fallback:
-        st.error(result.warning or "NASDAQ universe unavailable.")
-    st.caption(
-        f"Source: {result.source} · retrieved "
-        f"{result.retrieved_at.strftime('%Y-%m-%d %H:%M UTC')}"
-    )
-
-    total, sectors, industries = st.columns(3)
-    total.metric("Listed stocks", f"{len(universe):,}")
-    sectors.metric("Mapped sectors", f"{universe['Sector'].nunique():,}")
-    industries.metric("Provider industries", f"{universe['Industry'].nunique():,}")
-
-    search_column, sector_column, industry_column = st.columns([2, 1, 1])
-    search = search_column.text_input(
-        "Search symbol or company",
-        placeholder="AAPL or Apple",
-    ).strip()
-    sector_options = ["All sectors", *sorted(universe["Sector"].dropna().unique())]
-    sector = sector_column.selectbox("Sector", sector_options)
-    sector_frame = (
-        universe if sector == "All sectors" else universe[universe["Sector"] == sector]
-    )
-    industry_options = [
-        "All industries",
-        *sorted(sector_frame["Industry"].dropna().unique()),
-    ]
-    industry = industry_column.selectbox("Industry", industry_options)
-
-    filtered = sector_frame
-    if industry != "All industries":
-        filtered = filtered[filtered["Industry"] == industry]
-    if search:
-        search_mask = filtered["Symbol"].str.contains(
-            search, case=False, regex=False
-        ) | filtered["Name"].str.contains(search, case=False, regex=False)
-        filtered = filtered[search_mask]
-
-    st.caption(f"Showing {len(filtered):,} of {len(universe):,} stocks")
-    display_columns = [
-        "Symbol",
-        "Name",
-        "Sector",
-        "Industry",
-        "Last price",
-        "Market cap",
-        "Volume",
-        "Country",
-        "IPO year",
-    ]
-    selection = st.dataframe(
-        filtered[display_columns],
-        hide_index=True,
-        width="stretch",
-        height=620,
-        key=f"nasdaq_universe_{sector}_{industry}_{search}",
-        on_select="rerun",
-        selection_mode="single-row",
-        column_config={
-            "Last price": st.column_config.NumberColumn(format="$%.2f"),
-            "Market cap": st.column_config.NumberColumn(format="$%.0f"),
-            "Volume": st.column_config.NumberColumn(format="%.0f"),
-        },
-    )
-    selected_rows = _selected_rows(selection)
-    selected_symbol = (
-        str(filtered.iloc[selected_rows[0]]["Symbol"]) if selected_rows else None
-    )
-    selection_id = (sector, industry, search, selected_symbol)
-    if not selected_symbol:
-        st.session_state.pop("processed_nasdaq_symbol", None)
-    elif st.session_state.get("processed_nasdaq_symbol") != selection_id:
-        st.session_state["processed_nasdaq_symbol"] = selection_id
-        st.session_state["research_symbol"] = selected_symbol
-        st.session_state["pending_stocks_workspace_view"] = "Research"
-        st.session_state["pending_workspace_page"] = "Stocks"
-        st.rerun()
-
-
-def _legacy_market_page(horizon: str) -> None:
-    _heading("Market pulse", f"US regime overview · {horizon} profile")
-    symbols = ["SPY", "QQQ", "IWM", "^VIX", "TLT", "GLD"]
-    columns = st.columns(6)
-    fallback_symbols = []
-    for column, symbol in zip(columns, symbols, strict=True):
-        result = get_history(symbol, "6mo")
-        close = result.data["Close"]
-        change = (close.iloc[-1] / close.iloc[-2] - 1) * 100
-        column.metric(symbol, f"{close.iloc[-1]:,.2f}", f"{change:+.2f}%")
-        if result.is_fallback:
-            fallback_symbols.append(symbol)
-    if fallback_symbols:
-        st.warning("Demonstration data is active for: " + ", ".join(fallback_symbols))
-
-    performance = normalized_performance(symbols[:3])
-    figure = px.line(
-        performance,
-        labels={"value": "Growth of 100", "index": "Date", "variable": "Index"},
-        color_discrete_sequence=["#0b6e4f", "#d95d39", "#2364aa"],
-    )
-    figure.update_layout(height=390, legend_title_text="", hovermode="x unified")
-    st.plotly_chart(figure, width="stretch")
-
-    rotation = cached_sector_rotation(ROTATION_MODEL_VERSION)
-    leaders = rotation.head(3)
-    laggards = rotation.tail(3).sort_values("Rotation score")
-    left, right = st.columns(2)
-    with left:
-        st.subheader("Capital rotation leaders")
-        leader_selection = st.dataframe(
-            leaders[
-                [
-                    "Sector",
-                    "1M %",
-                    "3M %",
-                    "6M liquidity score",
-                    "Rotation score",
-                ]
-            ],
-            hide_index=True,
-            width="stretch",
-            key="market_leaders",
-            on_select="rerun",
-            selection_mode="single-row",
-        )
-    with right:
-        st.subheader("Areas under pressure")
-        laggard_selection = st.dataframe(
-            laggards[
-                [
-                    "Sector",
-                    "1M %",
-                    "3M %",
-                    "6M liquidity score",
-                    "Rotation score",
-                ]
-            ],
-            hide_index=True,
-            width="stretch",
-            key="market_laggards",
-            on_select="rerun",
-            selection_mode="single-row",
-        )
-    selected_sector = _selected_sector(
-        (leader_selection, leaders),
-        (laggard_selection, laggards),
-    )
-    if not selected_sector:
-        st.session_state.pop("processed_market_sector", None)
-    elif st.session_state.get("processed_market_sector") != selected_sector:
-        st.session_state["processed_market_sector"] = selected_sector
-        st.session_state["selected_sector"] = selected_sector
-        st.session_state["pending_workspace_page"] = "Sector rotation"
-        st.rerun()
-
-
-def _selected_sector(*tables: tuple[object, pd.DataFrame]) -> str | None:
-    """Return the sector represented by the first selected table row."""
-    for event, frame in tables:
-        rows = _selected_rows(event)
-        if rows:
-            return str(frame.iloc[rows[0]]["Sector"])
-    return None
-
-
-def _legacy_sector_page() -> None:
-    _heading(
-        "Sector rotation",
-        "Follow relative strength, six-month liquidity, and volume",
-    )
-    with st.spinner("Evaluating sector proxies..."):
-        rotation = cached_sector_rotation(ROTATION_MODEL_VERSION)
-    chart = px.bar(
-        rotation.sort_values("Rotation score"),
-        x="Rotation score",
-        y="Sector",
-        orientation="h",
-        color="Rotation score",
-        color_continuous_scale=["#d95d39", "#f4c95d", "#0b6e4f"],
-        range_color=[0, 100],
-    )
-    chart.update_layout(height=470, coloraxis_showscale=False)
-    st.plotly_chart(chart, width="stretch")
-    st.dataframe(
-        rotation,
-        hide_index=True,
-        width="stretch",
-        height=520,
-        row_height=82,
-        column_config={
-            "Price · SMA50": st.column_config.ImageColumn(
-                width=260,
-                help=("Six-month sector ETF price (green) and 50-day average (amber)."),
-            ),
-            "Rotation score": st.column_config.ProgressColumn(
-                min_value=0, max_value=100
-            ),
-            "1M %": st.column_config.NumberColumn(format="%.1f%%"),
-            "3M %": st.column_config.NumberColumn(format="%.1f%%"),
-            "6M %": st.column_config.NumberColumn(format="%.1f%%"),
-            "6M liquidity score": st.column_config.ProgressColumn(
-                min_value=0,
-                max_value=100,
-                help=(
-                    "Composite of six-month dollar-volume growth and the balance "
-                    "between up-day and down-day dollar volume."
-                ),
-            ),
-            "6M liquidity trend %": st.column_config.NumberColumn(format="%.1f%%"),
-            "6M flow balance %": st.column_config.NumberColumn(format="%.1f%%"),
-        },
-    )
-
-    sectors = rotation["Sector"].tolist()
-    selected_sector = st.session_state.pop("selected_sector", None)
-    selected_index = sectors.index(selected_sector) if selected_sector in sectors else 0
-    sector = str(
-        st.selectbox("Open sector", sectors, index=selected_index) or sectors[0]
-    )
-    with st.spinner(f"Ranking {sector} industries..."):
-        industries = cached_industry_rotation(sector, INDUSTRY_MODEL_VERSION)
-    st.subheader(f"{sector} industry ranking")
-    industry_selection = st.dataframe(
-        industries,
-        hide_index=True,
-        width="stretch",
-        row_height=82,
-        key=f"sector_industries_{sector}",
-        on_select="rerun",
-        selection_mode="single-row",
-        column_config={
-            "Price · SMA50": st.column_config.ImageColumn(
-                width=260,
-                help=(
-                    "Six-month representative industry ETF price (green) and "
-                    "50-day average (amber)."
-                ),
-            ),
-            "1M %": st.column_config.NumberColumn(format="%.1f%%"),
-            "3M %": st.column_config.NumberColumn(format="%.1f%%"),
-            "6M %": st.column_config.NumberColumn(format="%.1f%%"),
-            "Relative 3M %": st.column_config.NumberColumn(format="%.1f%%"),
-            "Breadth above SMA50 %": st.column_config.NumberColumn(format="%.0f%%"),
-            "6M liquidity score": st.column_config.ProgressColumn(
-                min_value=0, max_value=100
-            ),
-            "Industry score": st.column_config.ProgressColumn(
-                min_value=0, max_value=100
-            ),
-        },
-    )
-    industry_rows = _selected_rows(industry_selection)
-    active_industry_key = f"active_industry_{sector}"
-    if industry_rows:
-        industry = str(industries.iloc[industry_rows[0]]["Industry"])
-        st.session_state[active_industry_key] = industry
-    else:
-        industry = str(
-            st.session_state.get(
-                active_industry_key, str(industries.iloc[0]["Industry"])
+def _early_rotation_columns():
+    component_help = {
+        "Breadth acceleration": "Members crossing above SMA20 versus 10 sessions ago.",
+        "RS inflection": "Recent industry relative-strength change versus the market.",
+        "Positive dollar volume": (
+            "Abnormal five-day dollar volume, rewarded only with positive price."
+        ),
+        "Close pressure": "Recent closes near the upper end of each daily range.",
+    }
+    return {
+        "Early rotation score": st.column_config.ProgressColumn(
+            min_value=1,
+            max_value=10,
+            format="%.1f",
+            help="Equal-weight composite of four early accumulation signals.",
+        ),
+        **{
+            name: st.column_config.ProgressColumn(
+                min_value=1, max_value=10, format="%.1f", help=help_text
             )
-        )
-
-    with st.spinner(f"Evaluating representative {industry} securities..."):
-        stocks = cached_sector_stocks(sector, industry, STOCK_RANKING_MODEL_VERSION)
-    st.subheader(f"{industry} candidates")
-    st.caption(
-        "Representative development universe. Replace with licensed Russell 3000 "
-        "membership before production use."
-    )
-    candidate_selection = st.dataframe(
-        stocks,
-        hide_index=True,
-        width="stretch",
-        row_height=82,
-        key=f"sector_candidates_{sector}_{industry}",
-        on_select="rerun",
-        selection_mode="single-row",
-        column_config={
-            "Price": st.column_config.NumberColumn(format="$%.2f"),
-            "Day %": st.column_config.NumberColumn(format="%.2f%%"),
-            "Price · SMA50": st.column_config.ImageColumn(
-                width=260,
-                help="Six-month closing price (green) and 50-day average (amber).",
-            ),
-            "Quality": st.column_config.ProgressColumn(min_value=0, max_value=100),
-            "Risk": st.column_config.ProgressColumn(min_value=0, max_value=100),
-            "Technical": st.column_config.ProgressColumn(min_value=0, max_value=100),
+            for name, help_text in component_help.items()
         },
-    )
-    selected_rows = _selected_rows(candidate_selection)
-    selected_symbol = (
-        str(stocks.iloc[selected_rows[0]]["Symbol"]) if selected_rows else None
-    )
-    selection_id = (sector, industry, selected_symbol) if selected_symbol else None
-    if not selection_id:
-        st.session_state.pop("processed_candidate", None)
-    elif st.session_state.get("processed_candidate") != selection_id:
-        st.session_state["processed_candidate"] = selection_id
-        st.session_state["research_symbol"] = selected_symbol
-        st.session_state["pending_stocks_workspace_view"] = "Research"
-        st.session_state["pending_workspace_page"] = "Stocks"
-        st.rerun()
+    }
 
 
 def _load_scan(
@@ -1240,40 +828,52 @@ def _load_scan(
 
 
 def _ensure_rotation_columns(industries: pd.DataFrame) -> pd.DataFrame:
-    """Add rotation deltas when an older hot-loaded analysis module omits them."""
+    """Backfill unavailable rotation fields for hot-loaded legacy scan frames."""
     required = {
         "Momentum change",
         "Liquidity change",
         "Recent flow %",
         "Rotation state",
     }
-    if industries.empty or required.issubset(industries.columns):
+    if industries.empty:
         return industries
     frame = industries.copy()
 
     def normalized(column: str, low: float, high: float) -> pd.Series:
         return (100 * (frame[column] - low) / (high - low)).clip(0, 100)
 
-    frame["Momentum change"] = (
-        (
-            normalized("Return 1W %", -5, 8)
-            + normalized("Return 1M %", -10, 15)
-        )
-        / 2
-        - (
-            normalized("Return 3M %", -20, 30)
-            + normalized("Return 6M %", -30, 50)
-        )
-        / 2
-    ).round(1)
-    frame["Liquidity change"] = (
-        (frame["Liquidity 1W"] + frame["Liquidity 1M"]) / 2
-        - (frame["Liquidity 3M"] + frame["Liquidity 6M"]) / 2
-    ).round(1)
-    frame["Recent flow %"] = (
-        (frame["Flow 1W %"] + frame["Flow 1M %"]) / 2
-    ).round(1)
-    frame["Rotation state"] = frame.apply(_rotation_state_from_row, axis=1)
+    if not required.issubset(frame.columns):
+        frame["Momentum change"] = (
+            (
+                normalized("Return 1W %", -5, 8)
+                + normalized("Return 1M %", -10, 15)
+            )
+            / 2
+            - (
+                normalized("Return 3M %", -20, 30)
+                + normalized("Return 6M %", -30, 50)
+            )
+            / 2
+        ).round(1)
+        frame["Liquidity change"] = (
+            (frame["Liquidity 1W"] + frame["Liquidity 1M"]) / 2
+            - (frame["Liquidity 3M"] + frame["Liquidity 6M"]) / 2
+        ).round(1)
+        frame["Recent flow %"] = (
+            (frame["Flow 1W %"] + frame["Flow 1M %"]) / 2
+        ).round(1)
+        frame["Rotation state"] = frame.apply(_rotation_state_from_row, axis=1)
+    early_defaults: dict[str, object] = {
+        "Early rotation score": 0.0,
+        "Early rotation signal": "Unavailable",
+        "Breadth acceleration": 0.0,
+        "RS inflection": 0.0,
+        "Positive dollar volume": 0.0,
+        "Close pressure": 0.0,
+    }
+    for column, default in early_defaults.items():
+        if column not in frame:
+            frame[column] = default
     return frame
 
 
@@ -1320,8 +920,7 @@ def _rotation_state_from_row(row: pd.Series) -> str:
 
 
 def _market_page(load_mode: str) -> None:
-    _journey_progress(1)
-    _heading("Market pulse", "Follow momentum as liquidity rotates between industries")
+    _heading("Market overview", "Regime, liquidity, and industry rotation in one view")
     st.caption(
         "Built for active rotation decisions rather than a passive buy-and-hold "
         "assumption. Gaining and losing states require price momentum, liquidity, "
@@ -1417,20 +1016,56 @@ def _market_page(load_mode: str) -> None:
         for column, label in zip(horizon_columns, labels, strict=True):
             column.metric(
                 f"{label} market liquidity",
-                f"{industries[f'Liquidity {label}'].mean():.0f} / 100",
+                f"{_score_10(industries[f'Liquidity {label}'].mean()):.1f}/10",
                 f"Flow {industries[f'Flow {label} %'].mean():+.1f}%",
             )
     losing = industries[industries["Rotation state"] == "Losing"].sort_values(
         ["Momentum change", "Liquidity change"]
     )
+    early = industries[
+        industries["Early rotation signal"].isin(["Emerging", "Building"])
+    ].sort_values("Early rotation score", ascending=False)
     established_winners = industries[industries["Winning"]].sort_values(
         "Rotation score", ascending=False
     )
-    winning_count, losing_count, total_count = st.columns(3)
+    early_count, winning_count, losing_count, total_count = st.columns(4)
+    early_count.metric("Early rotation", f"{len(early):,}")
     winning_count.metric("Winning industries", f"{len(established_winners):,}")
     losing_count.metric("Losing industries", f"{len(losing):,}")
     total_count.metric("Regional industries", f"{len(industries):,}")
     st.subheader("Industry rotation now")
+    st.markdown("**Emerging or building accumulation**")
+    early_columns = [
+        "Region",
+        "Sector",
+        "Industry",
+        "Early rotation signal",
+        "Early rotation score",
+        "Breadth acceleration",
+        "RS inflection",
+        "Positive dollar volume",
+        "Close pressure",
+    ]
+    st.dataframe(
+        _display_score_columns(
+            early[early_columns].head(15),
+            (
+                "Early rotation score",
+                "Breadth acceleration",
+                "RS inflection",
+                "Positive dollar volume",
+                "Close pressure",
+            ),
+        ),
+        hide_index=True,
+        width="stretch",
+        column_config=_early_rotation_columns(),
+    )
+    st.caption(
+        "This secondary indicator looks for fresh, broad accumulation before an "
+        "industry qualifies as an established winner. It does not replace the "
+        "primary rotation state."
+    )
     gain_column, loss_column = st.columns(2)
     rotation_columns = [
         "Region",
@@ -1464,44 +1099,41 @@ def _market_page(load_mode: str) -> None:
     )
     rotation_view = st.segmented_control(
         "Industry direction",
-        ["Winning", "Losing"],
+        ["Early", "Winning", "Losing"],
         default="Winning",
         key="market_industry_direction",
     )
-    selected_frame = established_winners if rotation_view == "Winning" else losing
+    selected_frame = {
+        "Early": early,
+        "Winning": established_winners,
+        "Losing": losing,
+    }[rotation_view]
     if not selected_frame.empty:
-        selected_position = st.selectbox(
-            "Industry proxy chart",
-            range(len(selected_frame)),
-            format_func=lambda position: _industry_option_label(
-                selected_frame.iloc[position]
-            ),
-            key=f"market_industry_proxy_{rotation_view}",
-        )
-        selected_industry = selected_frame.iloc[int(selected_position)]
-        proxy, proxy_kind = _industry_proxy(selected_industry)
-        proxy_result = get_history(proxy, "1y")
-        if proxy_result.warning:
-            st.warning(proxy_result.warning)
-        st.plotly_chart(
-            _industry_proxy_figure(
-                proxy, proxy_result.data, market_histories["SPY"]
-            ),
-            width="stretch",
-        )
-        st.caption(
-            f"Proxy: {proxy} · {proxy_kind} · Source: {proxy_result.source}. The ETF "
-            "is a tradable proxy, not the exact equal-weight industry index used "
-            "by the rotation model."
+        _industry_proxy_gallery(
+            selected_frame.reset_index(drop=True),
+            rotation_view,
+            market_histories["SPY"],
         )
     st.subheader("Industry liquidity flow")
+    liquidity_score_columns = (
+        "Liquidity 1W",
+        "Liquidity 1M",
+        "Liquidity 3M",
+        "Liquidity 6M",
+        "Liquidity composite",
+        "Rotation score",
+        "Early rotation score",
+    )
+    heatmap_industries = _display_score_columns(
+        industries, liquidity_score_columns
+    )
     heatmap = px.treemap(
-        industries,
+        heatmap_industries,
         path=["Region", "Sector", "Industry"],
         values="Members",
         color="Liquidity composite",
         color_continuous_scale=["#d95d39", "#263238", "#49c28a"],
-        range_color=[0, 100],
+        range_color=[1, 10],
         hover_data=[
             "Liquidity 1W",
             "Liquidity 1M",
@@ -1514,6 +1146,8 @@ def _market_page(load_mode: str) -> None:
             "Momentum change",
             "Liquidity change",
             "Rotation state",
+            "Early rotation score",
+            "Early rotation signal",
             "Above rising SMA150 %",
         ],
         custom_data=["Region", "Sector", "Industry"],
@@ -1530,8 +1164,12 @@ def _market_page(load_mode: str) -> None:
     winning_industries = industries[
         industries["Winning"] & (industries["Rotation state"] == "Gaining")
     ].head(10)
-    winner_selection = st.dataframe(
+    winning_industries_display = _display_score_columns(
         winning_industries,
+        liquidity_score_columns,
+    )
+    winner_selection = st.dataframe(
+        winning_industries_display,
         hide_index=True,
         width="stretch",
         key="market_winning_industries",
@@ -1609,9 +1247,147 @@ def _industry_proxy_figure(
     return figure
 
 
+def _industry_proxy_thumbnail(
+    proxy: str, label: str, history: pd.DataFrame
+) -> go.Figure:
+    close = history["Close"].dropna()
+    normalized = close / close.iloc[0] * 100
+    figure = go.Figure()
+    figure.add_trace(
+        go.Scatter(
+            x=normalized.index,
+            y=normalized,
+            name=proxy,
+            mode="lines+markers",
+            line={"color": "#49c28a", "width": 2},
+            marker={"size": 8, "opacity": 0},
+        )
+    )
+    figure.add_trace(
+        go.Scatter(
+            x=normalized.index,
+            y=normalized.rolling(50).mean(),
+            name="SMA50",
+            line={"color": "#f4c95d", "width": 1.5},
+        )
+    )
+    figure.update_layout(
+        title={"text": label, "font": {"size": 14}},
+        height=230,
+        margin={"t": 42, "l": 12, "r": 12, "b": 12},
+        showlegend=False,
+        hovermode="x unified",
+        clickmode="event+select",
+        xaxis={"showgrid": False, "title": None},
+        yaxis={"showgrid": True, "title": None},
+    )
+    return figure
+
+
+def _industry_proxy_gallery(
+    industries: pd.DataFrame,
+    rotation_view: str,
+    benchmark_history: pd.DataFrame,
+) -> None:
+    st.subheader(f"{rotation_view} industry charts")
+    entries = []
+    proxy_results: dict[str, DataResult] = {}
+    for position, row in industries.iterrows():
+        proxy, proxy_kind = _industry_proxy(row)
+        if proxy not in proxy_results:
+            proxy_results[proxy] = get_history(proxy, "1y")
+        identity = (
+            rotation_view,
+            str(row["Region"]),
+            str(row["Sector"]),
+            str(row["Industry"]),
+        )
+        entries.append((position, row, proxy, proxy_kind, identity))
+
+    fallback_proxies = [
+        proxy for proxy, result in proxy_results.items() if result.is_fallback
+    ]
+    if fallback_proxies:
+        st.warning(
+            "Synthetic demonstration data is active for: "
+            + ", ".join(fallback_proxies)
+        )
+
+    identities = {entry[4] for entry in entries}
+    expanded = st.session_state.get("expanded_industry_proxy")
+    if expanded not in identities:
+        expanded = None
+        st.session_state.pop("expanded_industry_proxy", None)
+
+    if expanded:
+        _, row, proxy, proxy_kind, _ = next(
+            entry for entry in entries if entry[4] == expanded
+        )
+        with st.container(border=True):
+            title_column, close_column = st.columns([8, 1])
+            title_column.subheader(
+                f"{row['Industry']} · {row['Region']} · {row['Sector']}"
+            )
+            if close_column.button(
+                "Close",
+                key="close_industry_proxy_detail",
+                width="stretch",
+            ):
+                st.session_state.pop("expanded_industry_proxy", None)
+                st.session_state["proxy_gallery_version"] = (
+                    st.session_state.get("proxy_gallery_version", 0) + 1
+                )
+                st.rerun()
+            result = proxy_results[proxy]
+            st.plotly_chart(
+                _industry_proxy_figure(
+                    proxy, result.data, benchmark_history
+                ),
+                width="stretch",
+                key=f"expanded_proxy_{rotation_view}_{proxy}",
+            )
+            st.caption(
+                f"Proxy: {proxy} · {proxy_kind} · Source: {result.source}. The ETF "
+                "is a tradable proxy, not the exact equal-weight industry index."
+            )
+
+    gallery_version = st.session_state.get("proxy_gallery_version", 0)
+    for offset in range(0, len(entries), 3):
+        columns = st.columns(3)
+        row_entries = entries[offset : offset + 3]
+        for column, entry in zip(
+            columns[: len(row_entries)], row_entries, strict=True
+        ):
+            position, row, proxy, _, identity = entry
+            result = proxy_results[proxy]
+            label = f"{row['Industry']}<br><sup>{proxy} · {row['Region']}</sup>"
+            with column:
+                event = st.plotly_chart(
+                    _industry_proxy_thumbnail(proxy, label, result.data),
+                    width="stretch",
+                    key=(
+                        f"proxy_gallery_{gallery_version}_{rotation_view}_{position}"
+                    ),
+                    on_select="rerun",
+                    selection_mode="points",
+                    config={"displayModeBar": False},
+                )
+                open_detail = st.button(
+                    "Open detail",
+                    icon=":material/open_in_full:",
+                    help=f"Expand {row['Industry']}",
+                    key=(
+                        f"expand_proxy_{gallery_version}_{rotation_view}_{position}"
+                    ),
+                    width="stretch",
+                )
+                if (_selected_points(event) or open_detail) and expanded != identity:
+                    st.session_state["expanded_industry_proxy"] = identity
+                    st.rerun()
+
+
 def _sector_page(load_mode: str) -> None:
-    _journey_progress(2)
-    _heading("Rotation leaders", "Gaining industries and fundamentally strong setups")
+    _heading("Industry rotation", "Early shifts, established trends, and stock setups")
     st.caption(
         "Start with gaining short-horizon momentum or broaden the industry state "
         "to inspect European, Asian, and other listing markets. The Winning flag "
@@ -1629,10 +1405,14 @@ def _sector_page(load_mode: str) -> None:
     )
     momentum_state = st.segmented_control(
         "Industry momentum",
-        ["Gaining", "Winning", "Losing", "Mixed", "All"],
+        ["Early", "Gaining", "Winning", "Losing", "Mixed", "All"],
         default="Gaining",
     )
-    if momentum_state == "Winning":
+    if momentum_state == "Early":
+        winners = industries[
+            industries["Early rotation signal"].isin(["Emerging", "Building"])
+        ].copy()
+    elif momentum_state == "Winning":
         winners = industries[industries["Winning"]].copy()
     elif momentum_state == "All":
         winners = industries.copy()
@@ -1683,13 +1463,39 @@ def _sector_page(load_mode: str) -> None:
         else 0
     )
     sector = st.selectbox("Sector", sector_options, index=sector_index)
+    industry_sort = (
+        "Early rotation score" if momentum_state == "Early" else "Rotation score"
+    )
     sector_industries = winners[
         (winners["Region"] == region) & (winners["Sector"] == sector)
     ].sort_values(
-        ["Stocks", "Rotation score"], ascending=False
+        ["Stocks", industry_sort], ascending=False
     )
     st.subheader(f"{region} · {sector} industries")
-    st.dataframe(sector_industries, hide_index=True, width="stretch")
+    industry_score_columns = (
+        "Liquidity 1W",
+        "Liquidity 1M",
+        "Liquidity 3M",
+        "Liquidity 6M",
+        "Liquidity composite",
+        "Rotation score",
+        "Early rotation score",
+        "Breadth acceleration",
+        "RS inflection",
+        "Positive dollar volume",
+        "Close pressure",
+    )
+    st.dataframe(
+        _display_score_columns(sector_industries, industry_score_columns),
+        hide_index=True,
+        width="stretch",
+        column_config={
+            column: st.column_config.ProgressColumn(
+                min_value=1, max_value=10, format="%.1f"
+            )
+            for column in industry_score_columns
+        },
+    )
     industry_options = sector_industries["Industry"].tolist()
     selected_industry = selected_context[2] if selected_context else None
     industry_index = (
@@ -1745,9 +1551,10 @@ def _sector_page(load_mode: str) -> None:
             ),
         )
         setup_column, volume_column = st.columns(2)
-        minimum_setup = setup_column.slider(
-            "Minimum setup score", 0, 100, 60, 5
+        minimum_setup_display = setup_column.slider(
+            "Minimum setup score", 1, 10, 6, 1
         )
+        minimum_setup = _raw_score_threshold(minimum_setup_display)
         minimum_volume = volume_column.slider(
             "Minimum volume / 50-day average",
             1.5,
@@ -1760,9 +1567,10 @@ def _sector_page(load_mode: str) -> None:
         maximum_volatility = volatility_column.slider(
             "Maximum annualized volatility %", 20, 200, 100, 5
         )
-        maximum_risk = risk_column.slider(
-            "Maximum cached market risk", 0, 100, 80, 5
+        minimum_safety = risk_column.slider(
+            "Minimum safety score", 1, 10, 2, 1
         )
+        maximum_risk = _raw_risk_limit(minimum_safety)
         base_column, pivot_column = st.columns(2)
         maximum_base_width = base_column.slider(
             "Maximum consolidation width %",
@@ -1811,9 +1619,10 @@ def _sector_page(load_mode: str) -> None:
             help="Select no attributes to disable fundamental score filtering.",
         )
         score_column, match_column = st.columns(2)
-        minimum_fundamental = score_column.slider(
-            "Minimum fundamental score", 0, 100, 65, 5
+        minimum_fundamental_display = score_column.slider(
+            "Minimum fundamental score", 1, 10, 7, 1
         )
+        minimum_fundamental = _raw_score_threshold(minimum_fundamental_display)
         match_policy = match_column.segmented_control(
             "Attribute matching",
             ["Any selected", "All selected"],
@@ -1841,8 +1650,13 @@ def _sector_page(load_mode: str) -> None:
     stocks["Setup interpretation"] = stocks["Setup score"].map(
         _candidate_score_context
     )
-    candidate_selection = st.dataframe(
+    stocks_display = _display_score_columns(
         stocks,
+        ("Growth", "Quality", "Financial strength", "Valuation", "Setup score"),
+        ("Market risk",),
+    ).rename(columns={"Market risk": "Safety", "Risk label": "Risk level"})
+    candidate_selection = st.dataframe(
+        stocks_display,
         hide_index=True,
         width="stretch",
         row_height=82,
@@ -1894,37 +1708,34 @@ def _sector_page(load_mode: str) -> None:
                 help="Largest peak-to-trough decline; nearer zero is better.",
             ),
             "Growth": st.column_config.ProgressColumn(
-                min_value=0,
-                max_value=100,
-                help="Normalized growth; 65+ is positive and 80+ strong.",
+                min_value=1,
+                max_value=10,
+                help="Normalized growth; 6.5+ is positive and 8+ strong.",
             ),
             "Quality": st.column_config.ProgressColumn(
-                min_value=0,
-                max_value=100,
-                help="Available fundamentals average; 65+ positive, 80+ strong.",
+                min_value=1,
+                max_value=10,
+                help="Available fundamentals average; 6.5+ positive, 8+ strong.",
             ),
             "Financial strength": st.column_config.ProgressColumn(
-                min_value=0,
-                max_value=100,
-                help="Normalized leverage/liquidity; 65+ positive, 80+ strong.",
+                min_value=1,
+                max_value=10,
+                help="Normalized leverage/liquidity; 6.5+ positive, 8+ strong.",
             ),
             "Valuation": st.column_config.ProgressColumn(
-                min_value=0,
-                max_value=100,
-                help="P/E normalized from 8 (best) to 55 (weakest); 65+ positive.",
+                min_value=1,
+                max_value=10,
+                help="Normalized valuation; higher is more attractive.",
             ),
             "Setup score": st.column_config.ProgressColumn(
-                min_value=0,
-                max_value=100,
-                help="Percentage of 11 setup checks passed; 80+ is strong.",
+                min_value=1,
+                max_value=10,
+                help="Composite of 11 setup checks; 8+ is strong.",
             ),
-            "Market risk": st.column_config.ProgressColumn(
-                min_value=0,
-                max_value=100,
-                help=(
-                    "Cached price-risk score from volatility and drawdown. Higher "
-                    "is riskier; balance-sheet risk requires full research."
-                ),
+            "Safety": st.column_config.ProgressColumn(
+                min_value=1,
+                max_value=10,
+                help="Price-risk resilience from volatility and drawdown; 10 is best.",
             ),
             "ATR %": st.column_config.NumberColumn(
                 format="%.1f%%",
@@ -1932,8 +1743,8 @@ def _sector_page(load_mode: str) -> None:
             ),
             "Fundamental signal": st.column_config.TextColumn(
                 help=(
-                    "Strong when any core fundamental score is 80+; Positive at "
-                    "65+. This is not a qualitative moat assessment."
+                    "Strong when any core fundamental score is 8+; Positive at "
+                    "6.5+. This is not a qualitative moat assessment."
                 )
             ),
             "Volume signal": st.column_config.TextColumn(
@@ -1946,7 +1757,7 @@ def _sector_page(load_mode: str) -> None:
     )
     selected_rows = _selected_rows(candidate_selection)
     selected_symbol = (
-        str(stocks.iloc[selected_rows[0]]["Symbol"]) if selected_rows else None
+        str(stocks_display.iloc[selected_rows[0]]["Symbol"]) if selected_rows else None
     )
     selection_id = (sector, industry, selected_symbol) if selected_symbol else None
     if not selected_symbol:
@@ -1954,7 +1765,7 @@ def _sector_page(load_mode: str) -> None:
     elif st.session_state.get("processed_candidate") != selection_id:
         st.session_state["processed_candidate"] = selection_id
         st.session_state["research_symbol"] = selected_symbol
-        selected = stocks.iloc[selected_rows[0]]
+        selected = stocks_display.iloc[selected_rows[0]]
         st.session_state["research_listing"] = {
             "Symbol": selected_symbol,
             "Region": selected.get("Region"),
@@ -1989,14 +1800,7 @@ def _scan_coverage_warning(warning: str | None) -> None:
         st.warning(warning)
 
 
-def _research_page(risk_profile: str) -> None:
-    pending_section = st.session_state.pop("pending_research_section", None)
-    if pending_section:
-        st.session_state["research_section"] = pending_section
-    active_step = (
-        4 if st.session_state.get("research_section") == "Risk & trade plan" else 3
-    )
-    _journey_progress(active_step)
+def _research_page() -> None:
     default_symbol = st.session_state.get("research_symbol") or "NVDA"
     _heading(
         "Stock research", "Fundamentals and risk first, technical confirmation second"
@@ -2030,23 +1834,28 @@ def _research_page(risk_profile: str) -> None:
     )
     quality.metric(
         "Quality",
-        f"{result.analysis.quality.value:.0f}/100",
+        f"{_score_10(result.analysis.quality.value):.1f}/10",
         result.analysis.quality.label,
-        help="Higher is better: <45 weak, 45–64 neutral, 65–79 positive, ≥80 strong.",
+        help=(
+            "Higher is better: 1–4.4 weak, 4.5–6.4 neutral, "
+            "6.5–7.9 positive, 8+ strong."
+        ),
     )
     risk, technical = st.columns(2)
     risk.metric(
-        "Observed risk",
-        f"{result.analysis.risk.value:.0f}/100",
+        "Safety",
+        f"{_safety_score_10(result.analysis.risk.value):.1f}/10",
         result.analysis.risk.label,
-        delta_color="inverse",
-        help="Higher is riskier: <35 low, 35–59 moderate, 60–79 elevated, ≥80 high.",
+        help="Higher is better; 10 indicates the lowest observed market risk.",
     )
     technical.metric(
         "Technical",
-        f"{result.analysis.technical.value:.0f}/100",
+        f"{_score_10(result.analysis.technical.value):.1f}/10",
         result.analysis.technical.label,
-        help="Higher is better: <45 weak, 45–64 neutral, 65–79 positive, ≥80 strong.",
+        help=(
+            "Higher is better: 1–4.4 weak, 4.5–6.4 neutral, "
+            "6.5–7.9 positive, 8+ strong."
+        ),
     )
     volatility = _annualized_volatility(result.history.data)
     st.caption(
@@ -2056,33 +1865,32 @@ def _research_page(risk_profile: str) -> None:
         f"{_volatility_context(volatility)}"
     )
 
-    section = st.selectbox(
-        "Research section",
-        [
-            "Overview",
-            "Chart",
-            "Quality & growth",
-            "Business & moat",
-            "News & catalysts",
-            "Risk & trade plan",
-            "Peers",
-        ],
-        key="research_section",
-    )
-    if section == "Overview":
-        _research_overview(result)
-    elif section == "Chart":
-        st.plotly_chart(_price_chart(result), width="stretch")
-    elif section == "Quality & growth":
-        _quality_growth_panel(result)
-    elif section == "Business & moat":
-        _business_moat_panel(result.profile.data)
-    elif section == "News & catalysts":
-        _news_panel(symbol)
-    elif section == "Risk & trade plan":
-        _risk_panel(result, risk_profile)
-    else:
-        _peer_panel(symbol)
+    st.subheader("Overview")
+    _research_overview(result)
+
+    st.divider()
+    st.subheader("Price and volume")
+    st.plotly_chart(_price_chart(result), width="stretch")
+
+    st.divider()
+    st.subheader("Quality and growth")
+    _quality_growth_panel(result)
+
+    st.divider()
+    st.subheader("Business and moat")
+    _business_moat_panel(result.profile.data)
+
+    st.divider()
+    st.subheader("Risk and trade plan")
+    _risk_panel(result)
+
+    st.divider()
+    st.subheader("News and catalysts")
+    _news_panel(symbol)
+
+    st.divider()
+    st.subheader("Peers")
+    _peer_panel(symbol)
 
     st.divider()
     with st.form("research_watchlist"):
@@ -2127,11 +1935,11 @@ def _research_overview(result: AnalysisResult) -> None:
         else "Unavailable"
     )
     st.markdown(
-        f"### Swing setup: {setup.state} · {setup.score:.0f}/100"
+        f"### Swing setup: {setup.state} · {_score_10(setup.score):.1f}/10"
     )
     st.caption(
-        f"{_score_context(setup.score)} The score is the percentage of 11 "
-        "trend, base, pivot, and breakout checks that pass."
+        f"{_score_context(setup.score)} The score summarizes 11 trend, base, "
+        "pivot, and breakout checks."
     )
     target_column, earnings_column = st.columns(2)
     target_column.metric(
@@ -2177,17 +1985,38 @@ def _quality_growth_panel(result: AnalysisResult) -> None:
         ):
             column.metric(
                 name,
-                f"{score.value:.0f}/100" if score.completeness else "Unavailable",
+                (
+                    f"{_score_10(score.value):.1f}/10"
+                    if score.completeness
+                    else "Unavailable"
+                ),
                 score.label if score.completeness else None,
                 help=f"Reported metric coverage: {score.completeness:.0f}%.",
             )
     for name, score in pillars.items():
         with st.expander(
             f"{name} evidence · "
-            + (f"{score.value:.0f}/100" if score.completeness else "Unavailable")
+            + (
+                f"{_score_10(score.value):.1f}/10"
+                if score.completeness
+                else "Unavailable"
+            )
         ):
             if score.completeness:
-                _score_evidence(name, score)
+                st.caption(
+                    f"{_score_context(score.value)} Reported metric coverage: "
+                    f"{score.completeness:.0f}%."
+                )
+                st.dataframe(
+                    _fundamental_evidence_frame(profile, score),
+                    hide_index=True,
+                    width="stretch",
+                    column_config={
+                        "Score": st.column_config.ProgressColumn(
+                            min_value=1, max_value=10, format="%.1f"
+                        )
+                    },
+                )
             else:
                 st.info("No reported metrics are available for this pillar.")
 
@@ -2274,6 +2103,140 @@ def _quality_growth_panel(result: AnalysisResult) -> None:
         columns=["Measure", "Reported value", "How to read it"],
     )
     st.dataframe(frame, hide_index=True, width="stretch")
+
+
+def _fundamental_evidence_frame(
+    profile: dict[str, object], score: Score
+) -> pd.DataFrame:
+    free_cash_flow = profile.get("freeCashflow")
+    total_revenue = profile.get("totalRevenue")
+    free_cash_flow_margin = (
+        float(free_cash_flow) / float(total_revenue)
+        if isinstance(free_cash_flow, (int, float))
+        and isinstance(total_revenue, (int, float))
+        and total_revenue
+        else None
+    )
+    specifications = {
+        "Gross margin": (
+            profile.get("grossMargins"),
+            "percent",
+            "Neutral 32% · Positive 46% · Strong 56%+",
+            "Pricing power before operating costs; compare with direct peers.",
+        ),
+        "Operating margin": (
+            profile.get("operatingMargins"),
+            "percent",
+            "Neutral 14% · Positive 20% · Strong 24%+",
+            "Profit retained after normal operating expenses.",
+        ),
+        "Return on equity": (
+            profile.get("returnOnEquity"),
+            "percent",
+            "Neutral 14% · Positive 20% · Strong 24%+",
+            "Return on shareholder capital; high leverage can inflate it.",
+        ),
+        "Return on assets": (
+            profile.get("returnOnAssets"),
+            "percent",
+            "Neutral 7% · Positive 10% · Strong 12%+",
+            "Efficiency of the asset base; asset-heavy industries score lower.",
+        ),
+        "Revenue growth": (
+            profile.get("revenueGrowth"),
+            "percent",
+            "Neutral 10% · Positive 19% · Strong 26%+",
+            "Top-line expansion; consistency matters more than one period.",
+        ),
+        "Earnings growth": (
+            profile.get("earningsGrowth"),
+            "percent",
+            "Neutral 10% · Positive 19% · Strong 26%+",
+            "Profit growth; review whether it is recurring or one-off.",
+        ),
+        "Free cash flow margin": (
+            free_cash_flow_margin,
+            "percent",
+            "Neutral 6% · Positive 13% · Strong 18%+",
+            "Revenue converted into cash after capital expenditure.",
+        ),
+        "Positive free cash flow": (
+            free_cash_flow,
+            "currency",
+            "Positive = 10 · Zero or negative = 1",
+            "Cash remaining after operations and capital expenditure.",
+        ),
+        "Positive operating cash flow": (
+            profile.get("operatingCashflow"),
+            "currency",
+            "Positive = 10 · Zero or negative = 1",
+            "Cash generated by normal business operations.",
+        ),
+        "Debt to equity": (
+            profile.get("debtToEquity"),
+            "number",
+            "Neutral ≤119 · Positive ≤83 · Strong ≤56",
+            "Lower leverage generally improves financial resilience.",
+        ),
+        "Current ratio": (
+            profile.get("currentRatio"),
+            "number",
+            "Neutral 1.5 · Positive 1.8 · Strong 2.1+",
+            "Ability to cover short-term liabilities with current assets.",
+        ),
+        "Trailing P/E": (
+            profile.get("trailingPE"),
+            "number",
+            "Neutral ≤34 · Positive ≤25 · Strong ≤17",
+            "Price paid for trailing earnings; durability still matters.",
+        ),
+        "Forward P/E": (
+            profile.get("forwardPE"),
+            "number",
+            "Neutral ≤28 · Positive ≤21 · Strong ≤15",
+            "Price paid for estimated earnings; forecasts can change.",
+        ),
+        "Price to book": (
+            profile.get("priceToBook"),
+            "number",
+            "Neutral ≤6.0 · Positive ≤4.2 · Strong ≤2.8",
+            "Market value relative to net assets; sector relevance varies.",
+        ),
+        "Dividend yield": (
+            profile.get("dividendYield"),
+            "percent",
+            "Neutral 2.7% · Positive 3.9% · Strong 4.8%+",
+            "Current income yield; a high yield can signal elevated risk.",
+        ),
+        "Payout sustainability": (
+            profile.get("payoutRatio"),
+            "percent",
+            "Neutral ≤61% · Positive ≤48% · Strong ≤38%",
+            "Lower payout leaves more earnings to absorb shocks and reinvest.",
+        ),
+    }
+    rows = []
+    for component, normalized_score in score.components.items():
+        raw_value, kind, thresholds, interpretation = specifications[component]
+        rows.append(
+            (
+                component,
+                _format_research_value(raw_value, kind),
+                _score_10(normalized_score),
+                thresholds,
+                interpretation,
+            )
+        )
+    return pd.DataFrame(
+        rows,
+        columns=[
+            "Measure",
+            "Reported value",
+            "Score",
+            "Threshold context",
+            "Why it matters",
+        ],
+    )
 
 
 def _business_moat_panel(profile: dict[str, object]) -> None:
@@ -2514,30 +2477,56 @@ def _volatility_context(volatility: float, concise: bool = False) -> str:
     return f"Volatility: {band} at {volatility:.1f}% annualized; {sizing}."
 
 
+def _score_10(value: object) -> float:
+    """Convert an internal 0-100 strength score to a displayed 1-10 score."""
+    if not isinstance(value, (int, float)) or pd.isna(value):
+        return float("nan")
+    return round(max(1.0, min(10.0, float(value) / 10)), 1)
+
+
+def _safety_score_10(value: object) -> float:
+    """Convert an internal 0-100 risk score to safety where 10 is best."""
+    if not isinstance(value, (int, float)) or pd.isna(value):
+        return float("nan")
+    return round(max(1.0, min(10.0, 10 - float(value) / 10)), 1)
+
+
+def _raw_score_threshold(value: float) -> float:
+    return 0.0 if value <= 1 else min(100.0, value * 10)
+
+
+def _raw_risk_limit(value: float) -> float:
+    return 100.0 if value <= 1 else max(0.0, (10 - value) * 10)
+
+
+def _display_score_columns(
+    frame: pd.DataFrame,
+    score_columns: tuple[str, ...] = (),
+    risk_columns: tuple[str, ...] = (),
+) -> pd.DataFrame:
+    display = frame.copy()
+    for column in score_columns:
+        if column in display:
+            display[column] = display[column].map(_score_10)
+    for column in risk_columns:
+        if column in display:
+            display[column] = display[column].map(_safety_score_10)
+    return display
+
+
 def _score_context(value: float, risk: bool = False, concise: bool = False) -> str:
     if risk:
         bands = [(80, "High"), (60, "Elevated"), (35, "Moderate"), (0, "Low")]
-        thresholds = [(35, "moderate"), (60, "elevated"), (80, "high")]
+        display = _safety_score_10(value)
     else:
         bands = [(80, "Strong"), (65, "Positive"), (45, "Neutral"), (0, "Weak")]
-        thresholds = [(45, "neutral"), (65, "positive"), (80, "strong")]
+        display = _score_10(value)
     label = next(name for minimum, name in bands if value >= minimum)
+    score_name = "Safety" if risk else "Score"
     if concise:
-        return f"{label} band"
-    next_band = next(
-        ((threshold, name) for threshold, name in thresholds if value < threshold),
-        None,
-    )
-    if next_band is None:
-        return f"{label} band; above the highest {bands[0][0]}-point threshold."
-    threshold, name = next_band
-    direction = "risk reaches" if risk else "score reaches"
-    distance = threshold - value
-    unit = "point" if distance == 1 else "points"
-    return (
-        f"{label} band; {distance:.0f} {unit} until "
-        f"{direction} {name} at {threshold}."
-    )
+        return f"{label} · {display:.1f}/10"
+    suffix = "risk" if risk else "evidence"
+    return f"{score_name} {display:.1f}/10 · {label.lower()} {suffix}."
 
 
 def _watchlist_page() -> None:
@@ -2560,8 +2549,11 @@ def _watchlist_page() -> None:
             f"{missing} symbol(s) are outside the cached scan. Use Refresh now in "
             "Data controls to fetch them as part of a new market scan."
         )
+    display = _display_score_columns(
+        enriched, risk_columns=("market_risk",)
+    ).rename(columns={"market_risk": "safety", "risk_label": "risk_level"})
     st.dataframe(
-        enriched,
+        display,
         hide_index=True,
         width="stretch",
         column_config={
@@ -2570,15 +2562,15 @@ def _watchlist_page() -> None:
             "stop_price": st.column_config.NumberColumn("Stop", format="$%.2f"),
             "last_price": st.column_config.NumberColumn("Last", format="$%.2f"),
             "upside_%": st.column_config.NumberColumn("Upside", format="%.1f%%"),
-            "market_risk": st.column_config.ProgressColumn(
-                "Market risk", min_value=0, max_value=100
+            "safety": st.column_config.ProgressColumn(
+                "Safety", min_value=1, max_value=10, format="%.1f"
             ),
             "atr_%": st.column_config.NumberColumn("ATR", format="%.1f%%"),
         },
     )
     st.download_button(
         "Download CSV",
-        enriched.to_csv(index=False),
+        display.to_csv(index=False),
         "stockfinder-watchlist.csv",
         "text/csv",
     )
@@ -2633,7 +2625,19 @@ def _portfolio_page() -> None:
     pnl.metric("Unrealized P&L", f"${positions['pnl'].sum():,.2f}")
     concentration.metric("Largest position", f"{positions['allocation_%'].max():.1f}%")
     left, right = st.columns([2, 1])
-    left.dataframe(positions, hide_index=True, width="stretch")
+    positions_display = _display_score_columns(
+        positions, risk_columns=("market_risk",)
+    ).rename(columns={"market_risk": "safety", "risk_label": "risk_level"})
+    left.dataframe(
+        positions_display,
+        hide_index=True,
+        width="stretch",
+        column_config={
+            "safety": st.column_config.ProgressColumn(
+                "Safety", min_value=1, max_value=10, format="%.1f"
+            )
+        },
+    )
     allocation = px.pie(positions, values="market_value", names="symbol", hole=0.55)
     allocation.update_traces(textposition="inside", textinfo="label+percent")
     allocation.update_layout(showlegend=False, height=330)
@@ -2644,18 +2648,18 @@ def _portfolio_page() -> None:
         st.rerun()
 
 
-def _methodology_page(risk_profile: str, load_mode: str) -> None:
+def _methodology_page(load_mode: str) -> None:
     _heading("Methodology", "Transparent assumptions, controls, and known limits")
     st.subheader("Current profile")
-    first, second, third = st.columns(3)
+    first, second = st.columns(2)
     first.metric("Liquidity windows", "1W · 1M · 3M · 6M")
-    second.metric("Risk preset", risk_profile)
-    third.metric("Data mode", load_mode.title())
+    second.metric("Data mode", load_mode.title())
     st.subheader("Score policy")
     st.write(
-        "Fundamental quality, observed risk, and technical confirmation remain "
-        "separate. Missing inputs reduce completeness; they are never replaced by "
-        "an unexplained average value."
+        "All user-facing scores use a 1–10 scale, where 10 is best. Fundamental "
+        "quality, safety, and technical confirmation remain separate. Missing "
+        "inputs reduce completeness; they are never replaced by an unexplained "
+        "average value."
     )
     st.write(
         "The fundamental scorecard groups reported metrics into Quality, Growth, "
@@ -2678,6 +2682,13 @@ def _methodology_page(risk_profile: str, load_mode: str) -> None:
         "liquidity with 3M/6M baselines. An industry is Gaining only when momentum "
         "change, liquidity change, and recent directional volume are all positive; "
         "it is Losing when all three are negative. Other combinations are Mixed."
+    )
+    st.write(
+        "A separate early-rotation indicator looks for breadth accelerating above "
+        "SMA20, relative strength inflecting versus the broad market, abnormal "
+        "positive dollar volume, and closes near the upper end of their daily "
+        "ranges. Emerging requires at least three confirming components; Building "
+        "requires two. It is an earlier accumulation proxy, not observed fund flow."
     )
     st.write(
         "An industry is a winner only when its equal-weight price index is above a "
@@ -2818,12 +2829,17 @@ def _price_chart(result: AnalysisResult) -> go.Figure:
 
 
 def _score_evidence(title: str, score: Score) -> None:
-    st.markdown(f"**{title}: {score.value:.0f}/100 · {score.label}**")
+    displayed_value = (
+        _safety_score_10(score.value)
+        if "risk" in title.lower()
+        else _score_10(score.value)
+    )
+    st.markdown(f"**{title}: {displayed_value:.1f}/10 · {score.label}**")
     is_risk = "risk" in title.lower()
     st.caption(
         f"{_score_context(score.value, risk=is_risk)} "
         + (
-            "Higher scores mean more observed risk."
+            "Higher Safety means less observed risk."
             if is_risk
             else "Higher scores mean stronger evidence."
         )
@@ -2834,7 +2850,11 @@ def _score_evidence(title: str, score: Score) -> None:
     if score.components:
         frame = pd.DataFrame(
             [
-                (name, value, _score_context(value, risk=is_risk))
+                (
+                    name,
+                    _safety_score_10(value) if is_risk else _score_10(value),
+                    _score_context(value, risk=is_risk),
+                )
                 for name, value in score.components.items()
             ],
             columns=["Component", "Score", "Threshold context"],
@@ -2844,12 +2864,150 @@ def _score_evidence(title: str, score: Score) -> None:
             hide_index=True,
             width="stretch",
             column_config={
-                "Score": st.column_config.ProgressColumn(min_value=0, max_value=100)
+                "Score": st.column_config.ProgressColumn(
+                    min_value=1, max_value=10, format="%.1f"
+                )
             },
         )
 
 
-def _risk_panel(result: AnalysisResult, risk_profile: str) -> None:
+def _risk_evidence_frame(result: AnalysisResult) -> pd.DataFrame:
+    history = result.history.data
+    profile = result.profile.data
+    returns = history["Close"].pct_change().dropna()
+    volatility = float(returns.std() * (252**0.5)) if not returns.empty else None
+    drawdown = history["Close"] / history["Close"].cummax() - 1
+    maximum_drawdown = abs(float(drawdown.min())) if not drawdown.empty else None
+    specifications = {
+        "Volatility": (
+            volatility,
+            "percent",
+            "10% or less = 10 · 70%+ = 1",
+            "Higher variability usually requires wider stops and smaller positions.",
+        ),
+        "Maximum drawdown": (
+            maximum_drawdown,
+            "percent",
+            "5% or less = 10 · 60%+ = 1",
+            "Largest observed peak-to-trough decline in the loaded history.",
+        ),
+        "Balance-sheet leverage": (
+            profile.get("debtToEquity"),
+            "number",
+            "Debt/equity 20 or less = 10 · 220+ = 1",
+            "More debt can amplify losses and refinancing pressure.",
+        ),
+        "Liquidity": (
+            profile.get("currentRatio"),
+            "number",
+            "Current ratio 0.5 = 1 · 2.5+ = 10",
+            "Higher short-term asset coverage improves financial flexibility.",
+        ),
+    }
+    rows = []
+    for component, normalized_risk in result.analysis.risk.components.items():
+        raw_value, kind, thresholds, interpretation = specifications[component]
+        rows.append(
+            (
+                component,
+                _format_research_value(raw_value, kind),
+                _safety_score_10(normalized_risk),
+                thresholds,
+                interpretation,
+            )
+        )
+    return pd.DataFrame(
+        rows,
+        columns=[
+            "Measure",
+            "Observed value",
+            "Safety",
+            "Threshold context",
+            "Why it matters",
+        ],
+    )
+
+
+def _setup_evidence_frame(setup: SwingSetup) -> pd.DataFrame:
+    metrics = setup.metrics
+    observed = {
+        "Price above SMA50": (
+            f"${metrics.get('Close', 0):,.2f} vs ${metrics.get('SMA50', 0):,.2f}",
+            "Close > SMA50",
+            "Confirms price is above its intermediate trend.",
+        ),
+        "Price above SMA150": (
+            f"${metrics.get('Close', 0):,.2f} vs ${metrics.get('SMA150', 0):,.2f}",
+            "Close > SMA150",
+            "Confirms price is above its long-term trend.",
+        ),
+        "SMA50 rising": (
+            f"{metrics.get('SMA50 slope 20D %', 0):+.1f}% over 20 sessions",
+            "> 0%",
+            "A rising medium-term average confirms improving trend direction.",
+        ),
+        "SMA150 rising or flattening after crossover": (
+            f"{metrics.get('SMA150 slope 20D %', 0):+.1f}% over 20 sessions",
+            "> 0%, or ≥ -1% after bullish crossover",
+            "Allows a new trend while rejecting a clearly falling long-term base.",
+        ),
+        "Prior advance at least 10%": (
+            f"{metrics.get('Prior advance %', 0):+.1f}%",
+            "≥ 10%",
+            "Requires meaningful demand before the consolidation.",
+        ),
+        "Base range no more than 15%": (
+            f"{metrics.get('Base range %', 0):.1f}%",
+            "≤ 15%",
+            "A tighter base limits volatility before a possible breakout.",
+        ),
+        "Within 5% below pivot": (
+            f"{metrics.get('Distance to pivot %', 0):.1f}% below pivot",
+            "0% to 5% below",
+            "Keeps a potential entry close to the breakout level.",
+        ),
+        "Base volume controlled": (
+            f"{metrics.get('Base volume ratio', 0):.2f}x prior volume",
+            "≤ 1.10x",
+            "Contracting volume suggests limited distribution inside the base.",
+        ),
+        "Breakout above pivot": (
+            f"Close ${metrics.get('Close', 0):,.2f} · pivot ${setup.pivot:,.2f}",
+            "Close > pivot",
+            "Price must clear resistance before a breakout is confirmed.",
+        ),
+        "Breakout volume at least 1.5x": (
+            f"{metrics.get('Breakout volume ratio', 0):.2f}x average",
+            "≥ 1.50x",
+            "Strong participation reduces the chance of a weak breakout.",
+        ),
+        "Breakout close in upper quartile": (
+            f"{metrics.get('Breakout close location %', 0):.1f}% of daily range",
+            "≥ 75%",
+            "A strong close shows buyers retained control into the finish.",
+        ),
+    }
+    return pd.DataFrame(
+        [
+            (
+                rule,
+                "Pass" if passed else "Fail",
+                *observed[rule],
+            )
+            for rule, passed in setup.checks.items()
+        ],
+        columns=["Rule", "Result", "Observed", "Threshold", "Why it matters"],
+    )
+
+
+def _risk_panel(result: AnalysisResult) -> None:
+    risk_profile = st.segmented_control(
+        "Trade risk profile",
+        ["Conservative", "Balanced", "Aggressive"],
+        default="Balanced",
+        key=f"trade_risk_profile_{result.analysis.symbol}",
+        help="Controls suggested stop distance and default account risk.",
+    ) or "Balanced"
     multiplier = {"Conservative": 1.5, "Balanced": 2.0, "Aggressive": 2.5}[risk_profile]
     setup = analyze_long_swing_setup(result.history.data)
     atr_stop = setup.suggested_entry - multiplier * result.atr
@@ -2865,8 +3023,8 @@ def _risk_panel(result: AnalysisResult, risk_profile: str) -> None:
     )
     setup_score.metric(
         "Rule score",
-        f"{setup.score:.0f}/100",
-        help="Percentage of 11 setup checks passed; 65+ positive, 80+ strong.",
+        f"{_score_10(setup.score):.1f}/10",
+        help="Composite of 11 setup checks; 6.5+ positive and 8+ strong.",
     )
     pivot.metric(
         "Base pivot",
@@ -2881,11 +3039,19 @@ def _risk_panel(result: AnalysisResult, risk_profile: str) -> None:
         "this stock's normal daily range."
     )
 
-    evidence = pd.DataFrame(
-        [(name, "Pass" if passed else "Fail") for name, passed in setup.checks.items()],
-        columns=["Rule", "Result"],
+    st.subheader("Observed risk evidence")
+    st.dataframe(
+        _risk_evidence_frame(result),
+        hide_index=True,
+        width="stretch",
+        column_config={
+            "Safety": st.column_config.ProgressColumn(
+                min_value=1, max_value=10, format="%.1f"
+            )
+        },
     )
-    st.dataframe(evidence, hide_index=True, width="stretch")
+    st.subheader("Setup rule evidence")
+    st.dataframe(_setup_evidence_frame(setup), hide_index=True, width="stretch")
     st.subheader("Pattern measurements")
     base_length, base_width, prior_advance, breakout_volume = st.columns(4)
     base_length.metric(
@@ -3083,35 +3249,6 @@ def _selected_rows(event: Any) -> list[int]:
 def _selected_points(event: Any) -> list[dict[str, Any]]:
     selection = event.get("selection", {})
     return list(selection.get("points", []))
-
-
-def _journey_progress(active_step: int) -> None:
-    steps = [
-        ("Market", "Market pulse", None),
-        ("Rotation", "Rotation leaders", None),
-        ("Research", "Stocks", "Overview"),
-        ("Trade plan", "Stocks", "Risk & trade plan"),
-    ]
-    columns = st.columns(4)
-    for index, (column, step) in enumerate(zip(columns, steps, strict=True), start=1):
-        label, page, section = step
-        if index == active_step:
-            column.button(
-                f"{index}. {label}",
-                disabled=True,
-                key=f"journey_current_{active_step}_{index}",
-                width="stretch",
-            )
-        elif column.button(
-            f"{index}. {label}",
-            key=f"journey_{active_step}_{index}",
-            width="stretch",
-        ):
-            if section:
-                st.session_state["pending_research_section"] = section
-                st.session_state["pending_stocks_workspace_view"] = "Research"
-            st.session_state["pending_workspace_page"] = page
-            st.rerun()
 
 
 def _heading(title: str, subtitle: str) -> None:

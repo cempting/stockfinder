@@ -1,19 +1,30 @@
+import runpy
+from pathlib import Path
 from unittest.mock import patch
 
 import pandas as pd
 
 from stockfinder.app import main
+from stockfinder.models import Score, SwingSetup
 from stockfinder.ui import (
+    _consume_pending_navigation,
     _enrich_with_cached_risk,
     _ensure_rotation_columns,
     _filter_fundamental_candidates,
     _filter_market_stocks,
     _filter_technical_candidates,
+    _fundamental_evidence_frame,
     _fundamental_signal,
     _industry_proxy,
+    _industry_proxy_thumbnail,
     _metal_summary,
+    _raw_risk_limit,
+    _raw_score_threshold,
+    _safety_score_10,
+    _score_10,
     _score_context,
     _selected_rotation_context,
+    _setup_evidence_frame,
     _stock_discovery_frame,
     _volatility_context,
     _volume_signal,
@@ -29,16 +40,88 @@ def test_main_launches_streamlit_with_active_interpreter() -> None:
     assert command[-1].endswith("stockfinder/ui.py")
 
 
+def test_pending_navigation_is_centralized_and_validated() -> None:
+    state = {
+        "pending_workspace_page": "Stocks",
+        "pending_stocks_workspace_view": "Research",
+    }
+
+    _consume_pending_navigation(state)
+
+    assert state == {
+        "workspace_page": "Stocks",
+        "stocks_workspace_view": "Research",
+    }
+
+
+def test_invalid_pending_navigation_is_discarded() -> None:
+    state = {"workspace_page": "Market pulse", "pending_workspace_page": "Typo"}
+
+    _consume_pending_navigation(state)
+
+    assert state == {"workspace_page": "Market pulse"}
+
+
+def test_app_script_renders_streamlit_ui() -> None:
+    app_path = Path(__file__).parents[1] / "src" / "stockfinder" / "app.py"
+
+    with patch("stockfinder.ui.main") as ui_main:
+        runpy.run_path(str(app_path), run_name="__main__")
+
+    ui_main.assert_called_once_with()
+
+
 def test_score_context_explains_threshold_distance_and_direction() -> None:
-    assert _score_context(73) == (
-        "Positive band; 7 points until score reaches strong at 80."
+    assert _score_context(73) == "Score 7.3/10 · positive evidence."
+    assert _score_context(73, risk=True) == "Safety 2.7/10 · elevated risk."
+    assert _score_context(64) == "Score 6.4/10 · neutral evidence."
+
+
+def test_score_display_uses_one_to_ten_and_inverts_risk() -> None:
+    assert _score_10(0) == 1.0
+    assert _score_10(100) == 10.0
+    assert _safety_score_10(0) == 10.0
+    assert _safety_score_10(100) == 1.0
+    assert _score_10(_raw_score_threshold(7.0)) == 7.0
+    assert _safety_score_10(_raw_risk_limit(7.0)) == 7.0
+
+
+def test_fundamental_evidence_includes_raw_value_and_metric_thresholds() -> None:
+    score = Score(
+        value=66.7,
+        label="Positive",
+        components={"Revenue growth": 66.7},
+        completeness=100.0,
     )
-    assert _score_context(73, risk=True) == (
-        "Elevated band; 7 points until risk reaches high at 80."
+
+    evidence = _fundamental_evidence_frame({"revenueGrowth": 0.20}, score).iloc[0]
+
+    assert evidence["Reported value"] == "+20.0%"
+    assert evidence["Score"] == 6.7
+    assert evidence["Threshold context"] == (
+        "Neutral 10% · Positive 19% · Strong 26%+"
     )
-    assert _score_context(64) == (
-        "Neutral band; 1 point until score reaches positive at 65."
+    assert "Top-line expansion" in evidence["Why it matters"]
+
+
+def test_setup_evidence_includes_observed_value_and_rule_threshold() -> None:
+    setup = SwingSetup(
+        state="Developing",
+        score=50.0,
+        checks={"Breakout volume at least 1.5x": False},
+        metrics={"Breakout volume ratio": 1.2},
+        pivot=100.0,
+        suggested_entry=101.0,
+        atr_stop=95.0,
+        structural_stop=94.0,
     )
+
+    evidence = _setup_evidence_frame(setup).iloc[0]
+
+    assert evidence["Result"] == "Fail"
+    assert evidence["Observed"] == "1.20x average"
+    assert evidence["Threshold"] == "≥ 1.50x"
+    assert "participation" in evidence["Why it matters"]
 
 
 def test_volatility_context_explains_positioning_implication() -> None:
@@ -98,6 +181,10 @@ def test_rotation_columns_are_added_for_hot_loaded_scan_schema() -> None:
     enriched = _ensure_rotation_columns(industries)
 
     assert enriched["Rotation state"].tolist() == ["Gaining", "Losing"]
+    assert enriched["Early rotation signal"].tolist() == [
+        "Unavailable",
+        "Unavailable",
+    ]
 
 
 def test_cached_risk_enrichment_does_not_require_complete_analysis(monkeypatch) -> None:
@@ -318,6 +405,22 @@ def test_industry_proxy_prefers_industry_etf_then_sector_fallback() -> None:
 
     assert _industry_proxy(exact) == ("SMH", "representative industry ETF")
     assert _industry_proxy(fallback) == ("XLE", "sector ETF fallback")
+
+
+def test_industry_proxy_thumbnail_is_compact_and_selectable() -> None:
+    dates = pd.bdate_range("2026-01-01", periods=80)
+    history = pd.DataFrame(
+        {"Close": range(100, 180), "Volume": [1_000_000] * 80}, index=dates
+    )
+
+    figure = _industry_proxy_thumbnail("SMH", "Semiconductors", history)
+
+    assert len(figure.data) == 2
+    assert figure.data[0].mode == "lines+markers"
+    assert figure.data[0].marker.opacity == 0
+    assert figure.layout.height == 230
+    assert figure.layout.clickmode == "event+select"
+    assert not figure.layout.showlegend
 
 
 def test_rotation_context_preserves_listing_region() -> None:
