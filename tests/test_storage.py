@@ -2,7 +2,14 @@ from datetime import UTC, datetime
 
 import pandas as pd
 
-from stockfinder.storage import Repository, ScanSnapshot, ScanSnapshotStore
+from stockfinder.storage import (
+    CompanyProfileCache,
+    MarketHistoryCache,
+    Repository,
+    ScanSnapshot,
+    ScanSnapshotStore,
+    application_data_dir,
+)
 
 
 def test_watchlist_round_trip(tmp_path) -> None:
@@ -14,6 +21,45 @@ def test_watchlist_round_trip(tmp_path) -> None:
     assert row["symbol"] == "NVDA"
     assert row["notes"] == "Strong growth"
     assert row["target_price"] == 130.0
+
+
+def test_market_history_cache_merges_and_restores_last_known_data(tmp_path) -> None:
+    cache = MarketHistoryCache(tmp_path / "market")
+    first = pd.DataFrame(
+        {"Close": [100.0, 101.0], "Volume": [1000, 1100]},
+        index=pd.date_range("2026-01-01", periods=2),
+    )
+    update = pd.DataFrame(
+        {"Close": [102.0, 103.0], "Volume": [1200, 1300]},
+        index=pd.date_range("2026-01-02", periods=2),
+    )
+
+    merged = cache.merge("TEST", first)
+    merged = cache.merge("TEST", update)
+    restored = MarketHistoryCache(tmp_path / "market").load("TEST")
+
+    assert merged["Close"].tolist() == [100.0, 102.0, 103.0]
+    assert restored is not None
+    assert restored.equals(merged)
+    assert cache.is_fresh("TEST", 1)
+
+
+def test_application_data_dir_honors_cloud_mount(monkeypatch, tmp_path) -> None:
+    cloud_data = tmp_path / "cloud-data"
+    monkeypatch.setenv("STOCKFINDER_DATA_DIR", str(cloud_data))
+
+    assert application_data_dir() == cloud_data
+    assert cloud_data.is_dir()
+
+
+def test_company_profile_cache_persists_json(tmp_path) -> None:
+    cache = CompanyProfileCache(tmp_path / "profiles")
+    profile = {"longName": "Test Corp", "marketCap": 1_000_000}
+
+    cache.save("TEST", profile)
+
+    assert CompanyProfileCache(tmp_path / "profiles").load("TEST") == profile
+    assert cache.is_fresh("TEST", 1)
 
 
 def test_position_round_trip_and_delete(tmp_path) -> None:

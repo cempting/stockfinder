@@ -1,6 +1,9 @@
 """Market data access with explicit source and fallback metadata."""
 
 import json
+import os
+import random
+import time
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from functools import lru_cache
@@ -10,6 +13,8 @@ from urllib.request import Request, urlopen
 import numpy as np
 import pandas as pd
 import yfinance as yf
+
+from stockfinder.storage import CompanyProfileCache, MarketHistoryCache
 
 STOCK_SCREENER_URL = (
     "https://api.nasdaq.com/api/screener/stocks"
@@ -571,8 +576,19 @@ def get_exchange_universe(exchange: str, as_of: date | None = None) -> DataResul
         },
     )
     try:
-        with urlopen(request, timeout=30) as response:  # noqa: S310
-            payload = json.load(response)
+        payload = None
+        last_error: Exception | None = None
+        for attempt in range(3):
+            try:
+                with urlopen(request, timeout=30) as response:  # noqa: S310
+                    payload = json.load(response)
+                break
+            except Exception as error:
+                last_error = error
+                if attempt < 2:
+                    time.sleep(0.25 * (2**attempt) + random.uniform(0.0, 0.15))
+        if payload is None:
+            raise RuntimeError(f"Nasdaq request failed after retries: {last_error}")
         data = payload.get("data") or {}
         rows = data.get("rows") or []
         universe = parse_nasdaq_universe(rows)
@@ -781,60 +797,196 @@ def _numeric(value: Any) -> float | None:
         return None
 
 
-@lru_cache(maxsize=32)
-def get_batch_histories(symbols: tuple[str, ...], period: str = "2y") -> DataResult:
-    """Download adjusted histories concurrently without synthetic substitutions."""
-    retrieved_at = datetime.now(UTC)
-    normalized = tuple(dict.fromkeys(symbol.upper() for symbol in symbols if symbol))
-    if not normalized:
-        return DataResult({}, "Yahoo Finance batch", retrieved_at)
-    histories: dict[str, pd.DataFrame] = {}
-    missing = []
-    failures = []
-    for offset in range(0, len(normalized), 200):
-        chunk = normalized[offset : offset + 200]
+@lru_cache(maxsize=1)
+def _market_history_cache() -> MarketHistoryCache:
+    return MarketHistoryCache()
+
+
+@lru_cache(maxsize=1)
+def _company_profile_cache() -> CompanyProfileCache:
+    return CompanyProfileCache()
+
+
+def _history_cache_max_age_hours() -> float:
+    return float(os.environ.get("STOCKFINDER_HISTORY_MAX_AGE_HOURS", "18"))
+
+
+def _minimum_history_rows(period: str) -> int:
+    return {"6mo": 80, "1y": 170, "2y": 350}.get(period, 50)
+
+
+def _trim_history(history: pd.DataFrame, period: str) -> pd.DataFrame:
+    sessions = {"1mo": 23, "3mo": 66, "6mo": 132, "1y": 264, "2y": 528}
+    limit = sessions.get(period)
+    return history.tail(limit) if limit is not None else history
+
+
+def _validate_history(history: pd.DataFrame) -> pd.DataFrame:
+    """Return normalized valid OHLCV rows or an empty frame."""
+    if history.empty or "Close" not in history:
+        return pd.DataFrame()
+    frame = history.copy()
+    frame = frame[~frame.index.duplicated(keep="last")].sort_index()
+    numeric_columns = [
+        column
+        for column in ("Open", "High", "Low", "Close", "Volume")
+        if column in frame
+    ]
+    frame[numeric_columns] = frame[numeric_columns].apply(
+        pd.to_numeric, errors="coerce"
+    )
+    frame = frame.dropna(subset=["Close"])
+    valid = frame["Close"] > 0
+    if "Volume" in frame:
+        valid &= frame["Volume"].fillna(0) >= 0
+    if {"High", "Low"}.issubset(frame.columns):
+        valid &= frame["High"] >= frame["Low"]
+        valid &= frame["Close"].between(frame["Low"], frame["High"])
+        if "Open" in frame:
+            valid &= frame["Open"].between(frame["Low"], frame["High"])
+    return frame.loc[valid]
+
+
+def _extract_batch_history(
+    downloaded: pd.DataFrame, symbol: str, symbol_count: int
+) -> pd.DataFrame | None:
+    try:
+        frame = (
+            downloaded[symbol]
+            if isinstance(downloaded.columns, pd.MultiIndex)
+            else downloaded if symbol_count == 1 else None
+        )
+        if not isinstance(frame, pd.DataFrame):
+            return None
+        available = [
+            column
+            for column in ("Open", "High", "Low", "Close", "Volume")
+            if column in frame
+        ]
+        if "Close" not in available:
+            return None
+        frame = _validate_history(frame[available])
+        return frame if len(frame) >= 2 else None
+    except KeyError:
+        return None
+
+
+def _download_history_chunk(
+    symbols: tuple[str, ...], period: str, attempts: int = 2
+) -> tuple[dict[str, pd.DataFrame], list[str], int]:
+    collected: dict[str, pd.DataFrame] = {}
+    remaining = symbols
+    for attempt in range(attempts):
         try:
             downloaded = yf.download(
-                list(chunk),
+                list(remaining),
                 period=period,
                 auto_adjust=True,
                 group_by="ticker",
                 threads=True,
                 progress=False,
+                timeout=30,
             )
-            if not isinstance(downloaded, pd.DataFrame):
+            if not isinstance(downloaded, pd.DataFrame) or downloaded.empty:
                 raise ValueError("Yahoo Finance returned no tabular history")
-        except Exception as error:
-            failures.append(f"chunk {offset // 200 + 1}: {error}")
-            missing.extend(chunk)
-            continue
-        for symbol in chunk:
-            try:
-                frame = (
-                    downloaded[symbol]
-                    if isinstance(downloaded.columns, pd.MultiIndex)
-                    else downloaded
+            histories = {
+                symbol: frame
+                for symbol in remaining
+                if (
+                    frame := _extract_batch_history(
+                        downloaded, symbol, len(remaining)
+                    )
                 )
-                if not isinstance(frame, pd.DataFrame):
-                    raise ValueError("Yahoo Finance returned an invalid ticker frame")
-                available = [
-                    column
-                    for column in ("Open", "High", "Low", "Close", "Volume")
-                    if column in frame
-                ]
-                frame = frame[available].dropna(subset=["Close"])
-                if len(frame) < 50:
-                    raise ValueError("insufficient history")
-                histories[symbol] = frame
-            except (KeyError, ValueError):
-                missing.append(symbol)
+                is not None
+            }
+            collected.update(histories)
+            remaining = tuple(symbol for symbol in remaining if symbol not in histories)
+            if not remaining:
+                return collected, [], attempt
+        except Exception:
+            pass
+        if attempt + 1 < attempts:
+            delay = 0.2 * (2**attempt) + random.uniform(0.0, 0.15)
+            time.sleep(delay)
+    if len(remaining) <= 5:
+        return collected, list(remaining), attempts
+    midpoint = len(remaining) // 2
+    left, left_missing, left_retries = _download_history_chunk(
+        remaining[:midpoint], period, attempts
+    )
+    right, right_missing, right_retries = _download_history_chunk(
+        remaining[midpoint:], period, attempts
+    )
+    return (
+        {**collected, **left, **right},
+        [*left_missing, *right_missing],
+        left_retries + right_retries + attempts,
+    )
+
+
+@lru_cache(maxsize=32)
+def get_batch_histories(symbols: tuple[str, ...], period: str = "2y") -> DataResult:
+    """Return cached daily histories, adaptively retrying stale or missing data."""
+    retrieved_at = datetime.now(UTC)
+    normalized = tuple(dict.fromkeys(symbol.upper() for symbol in symbols if symbol))
+    if not normalized:
+        return DataResult({}, "Yahoo Finance batch", retrieved_at)
+    cache = _market_history_cache()
+    minimum_rows = _minimum_history_rows(period)
+    histories = {}
+    needs_update = []
+    needs_full_history = []
+    for symbol in normalized:
+        cached = cache.load(symbol)
+        if (
+            cached is not None
+            and len(cached) >= minimum_rows
+            and cache.is_fresh(symbol, _history_cache_max_age_hours())
+        ):
+            histories[symbol] = _trim_history(cached, period)
+        elif cached is not None and len(cached) >= minimum_rows:
+            needs_update.append(symbol)
+        else:
+            needs_full_history.append(symbol)
+
+    missing = []
+    retry_count = 0
+    fetch_groups = ((needs_update, "1mo"), (needs_full_history, period))
+    for requested_symbols, requested_period in fetch_groups:
+        for offset in range(0, len(requested_symbols), 200):
+            chunk = tuple(requested_symbols[offset : offset + 200])
+            downloaded, chunk_missing, retries = _download_history_chunk(
+                chunk, requested_period
+            )
+            retry_count += retries
+            for symbol, frame in downloaded.items():
+                merged = cache.merge(symbol, frame)
+                if len(merged) >= 50:
+                    histories[symbol] = _trim_history(merged, period)
+            missing.extend(chunk_missing)
+
+    stale_symbols = []
+    unresolved = []
+    for symbol in dict.fromkeys(missing):
+        cached = cache.load(symbol)
+        if cached is not None and len(cached) >= 50:
+            histories[symbol] = _trim_history(cached, period)
+            stale_symbols.append(symbol)
+        else:
+            unresolved.append(symbol)
     warning_parts = []
-    if missing:
-        warning_parts.append(f"No usable history for {len(missing):,} symbols")
-    if failures:
-        warning_parts.append(f"{len(failures)} batch requests failed")
+    if unresolved:
+        warning_parts.append(f"No usable history for {len(unresolved):,} symbols")
+    if stale_symbols:
+        warning_parts.append(
+            f"Last-known cached history used for {len(stale_symbols):,} symbols"
+        )
+    if retry_count:
+        warning_parts.append(f"{retry_count:,} adaptive retries")
     warning = "; ".join(warning_parts) or None
-    return DataResult(histories, "Yahoo Finance batch", retrieved_at, warning=warning)
+    cache_count = len(normalized) - len(needs_update) - len(needs_full_history)
+    source = f"Yahoo Finance + persistent cache ({cache_count:,} fresh hits)"
+    return DataResult(histories, source, retrieved_at, warning=warning)
 
 
 def clear_market_data_caches() -> None:
@@ -848,6 +1000,8 @@ def clear_market_data_caches() -> None:
     get_history.cache_clear()
     get_profile.cache_clear()
     get_news.cache_clear()
+    _market_history_cache.cache_clear()
+    _company_profile_cache.cache_clear()
 
 
 def _demo_history(symbol: str, periods: int = 260) -> pd.DataFrame:
@@ -872,19 +1026,47 @@ def _demo_history(symbol: str, periods: int = 260) -> pd.DataFrame:
 
 @lru_cache(maxsize=256)
 def get_history(symbol: str, period: str = "1y") -> DataResult:
-    """Return adjusted daily history, falling back visibly when Yahoo fails."""
+    """Return daily history with persistent last-known-good fallback."""
     retrieved_at = datetime.now(UTC)
+    normalized_symbol = symbol.upper()
+    cache = _market_history_cache()
+    cached = cache.load(normalized_symbol)
+    if (
+        cached is not None
+        and len(cached) >= _minimum_history_rows(period)
+        and cache.is_fresh(normalized_symbol, _history_cache_max_age_hours())
+    ):
+        return DataResult(
+            _trim_history(cached, period),
+            "Persistent Yahoo Finance cache",
+            retrieved_at,
+        )
     try:
-        history = yf.Ticker(symbol).history(period=period, auto_adjust=True)
-        history = history[["Open", "High", "Low", "Close", "Volume"]].dropna(
-            subset=["Close"]
+        history = yf.Ticker(normalized_symbol).history(period=period, auto_adjust=True)
+        history = _validate_history(
+            history[["Open", "High", "Low", "Close", "Volume"]]
         )
         if len(history) < 50:
             raise ValueError(f"Only {len(history)} valid observations returned")
-        return DataResult(history, "Yahoo Finance", retrieved_at)
-    except Exception as error:
+        history = cache.merge(normalized_symbol, history)
         return DataResult(
-            _demo_history(symbol),
+            _trim_history(history, period),
+            "Yahoo Finance + persistent cache",
+            retrieved_at,
+        )
+    except Exception as error:
+        if cached is not None and len(cached) >= 50:
+            return DataResult(
+                _trim_history(cached, period),
+                "Stale persistent Yahoo Finance cache",
+                retrieved_at,
+                warning=(
+                    f"Yahoo Finance unavailable for {normalized_symbol}; using "
+                    f"last-known data: {error}"
+                ),
+            )
+        return DataResult(
+            _demo_history(normalized_symbol),
             "Synthetic demonstration data",
             retrieved_at,
             is_fallback=True,
@@ -894,17 +1076,38 @@ def get_history(symbol: str, period: str = "1y") -> DataResult:
 
 @lru_cache(maxsize=128)
 def get_profile(symbol: str) -> DataResult:
-    """Return available company metrics without masking provider failures."""
+    """Return company metrics with persistent last-known-good fallback."""
     retrieved_at = datetime.now(UTC)
+    normalized_symbol = symbol.upper()
+    cache = _company_profile_cache()
+    cached = cache.load(normalized_symbol)
+    max_age_hours = float(
+        os.environ.get("STOCKFINDER_PROFILE_MAX_AGE_HOURS", "168")
+    )
+    if cached is not None and cache.is_fresh(normalized_symbol, max_age_hours):
+        return DataResult(
+            cached, "Persistent Yahoo Finance profile cache", retrieved_at
+        )
     try:
-        profile = yf.Ticker(symbol).get_info()
+        profile = yf.Ticker(normalized_symbol).get_info()
         if not profile:
             raise ValueError("No company profile returned")
-        return DataResult(profile, "Yahoo Finance", retrieved_at)
+        cache.save(normalized_symbol, profile)
+        return DataResult(profile, "Yahoo Finance + persistent cache", retrieved_at)
     except Exception as error:
-        seed = sum(ord(character) for character in symbol)
+        if cached is not None:
+            return DataResult(
+                cached,
+                "Stale persistent Yahoo Finance profile cache",
+                retrieved_at,
+                warning=(
+                    f"Yahoo Finance profile unavailable for {normalized_symbol}; "
+                    f"using last-known data: {error}"
+                ),
+            )
+        seed = sum(ord(character) for character in normalized_symbol)
         profile = {
-            "longName": symbol,
+            "longName": normalized_symbol,
             "revenueGrowth": 0.04 + (seed % 22) / 100,
             "earningsGrowth": 0.03 + (seed % 27) / 100,
             "returnOnEquity": 0.08 + (seed % 25) / 100,
@@ -920,7 +1123,9 @@ def get_profile(symbol: str) -> DataResult:
             "Synthetic demonstration data",
             retrieved_at,
             is_fallback=True,
-            warning=f"Yahoo Finance profile unavailable for {symbol}: {error}",
+            warning=(
+                f"Yahoo Finance profile unavailable for {normalized_symbol}: {error}"
+            ),
         )
 
 

@@ -2,7 +2,6 @@
 
 from collections.abc import MutableMapping
 from datetime import UTC, date, datetime
-from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -42,9 +41,13 @@ from stockfinder.data import (
 )
 from stockfinder.models import Score, SwingSetup
 from stockfinder.scoring import score_fundamentals
-from stockfinder.storage import Repository, ScanSnapshot, ScanSnapshotStore
+from stockfinder.storage import (
+    Repository,
+    ScanSnapshot,
+    ScanSnapshotStore,
+    application_data_dir,
+)
 
-ROOT = Path(__file__).resolve().parents[2]
 MARKET_SCAN_VERSION = "2026-09-early-rotation-v11"
 WORKSPACE_PAGES = (
     "Market pulse",
@@ -67,12 +70,12 @@ STOCKS_VIEWS = ("Discover", "Research", "Watchlist")
 
 @st.cache_resource
 def repository() -> Repository:
-    return Repository(ROOT / "data" / "stockfinder.db")
+    return Repository(application_data_dir() / "stockfinder.db")
 
 
 @st.cache_resource
 def scan_snapshot_store() -> ScanSnapshotStore:
-    return ScanSnapshotStore(ROOT / "data" / "latest_scan")
+    return ScanSnapshotStore(application_data_dir() / "latest_scan")
 
 
 @st.cache_data(ttl=60 * 60 * 6, show_spinner=False)

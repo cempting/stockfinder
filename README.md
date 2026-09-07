@@ -34,6 +34,38 @@ streamlit run src/stockfinder/ui.py
 
 The application opens at <http://localhost:8501> by default.
 
+## Data Cache
+
+Stockfinder persists last-known-good daily histories, completed scans, watchlists,
+and portfolio data under `data/`. Set `STOCKFINDER_DATA_DIR` to use a mounted
+cloud volume:
+
+```bash
+export STOCKFINDER_DATA_DIR=/data
+```
+
+Fresh history files are reused for 18 hours by default. Override this with
+`STOCKFINDER_HISTORY_MAX_AGE_HOURS`. Company profiles are reused for seven days;
+override this with `STOCKFINDER_PROFILE_MAX_AGE_HOURS`. Provider failures are
+retried with smaller batches; unresolved symbols use last-known real data when
+available. Synthetic data is reserved for symbols with no cached or provider
+data.
+
+## Container Deployment
+
+Build and run locally:
+
+```bash
+docker build -t stockfinder .
+docker run --rm -p 8501:8501 -v stockfinder-data:/data stockfinder
+```
+
+The container runs as a non-root user, listens on `0.0.0.0`, honors the platform
+`PORT` variable, and exposes Streamlit's health endpoint at
+`/_stcore/health`. Mount `/data` to retain market histories and user-owned state
+between deployments. Without a volume, the app still runs but container state is
+ephemeral.
+
 ## Current Features
 
 - Market pulse for major US indices and cross-asset proxies

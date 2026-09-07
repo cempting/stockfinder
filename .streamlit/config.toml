@@ -1,2 +1,7 @@
 [server]
 headless = true
+address = "0.0.0.0"
+enableXsrfProtection = true
+
+[browser]
+gatherUsageStats = false

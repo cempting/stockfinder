@@ -183,3 +183,81 @@ def test_risk_metrics_penalize_larger_drawdown() -> None:
     assert risk_metrics(falling, profile)["Maximum drawdown"] > risk_metrics(
         stable, profile
     )["Maximum drawdown"]
+
+
+def test_adaptive_history_download_splits_failed_large_batches(monkeypatch) -> None:
+    dates = pd.bdate_range("2026-01-01", periods=60)
+    frame = pd.DataFrame(
+        {
+            "Open": range(60),
+            "High": range(1, 61),
+            "Low": range(60),
+            "Close": range(1, 61),
+            "Volume": [1_000] * 60,
+        },
+        index=dates,
+    )
+
+    def download(symbols, **kwargs):
+        del kwargs
+        if len(symbols) > 3:
+            raise RuntimeError("batch too large")
+        return pd.concat({symbol: frame for symbol in symbols}, axis=1)
+
+    monkeypatch.setattr(data.yf, "download", download)
+    monkeypatch.setattr(data.time, "sleep", lambda delay: None)
+
+    histories, missing, retries = data._download_history_chunk(
+        tuple(f"S{index}" for index in range(6)), "1y", attempts=1
+    )
+
+    assert set(histories) == {f"S{index}" for index in range(6)}
+    assert not missing
+    assert retries >= 1
+
+
+def test_history_validation_rejects_impossible_candles() -> None:
+    history = pd.DataFrame(
+        {
+            "Open": [100.0, 120.0],
+            "High": [110.0, 110.0],
+            "Low": [90.0, 90.0],
+            "Close": [105.0, 115.0],
+            "Volume": [1_000, 1_000],
+        },
+        index=pd.date_range("2026-01-01", periods=2),
+    )
+
+    validated = data._validate_history(history)
+
+    assert len(validated) == 1
+    assert validated.iloc[0]["Close"] == 105.0
+
+
+def test_batch_history_refresh_uses_incremental_window(monkeypatch, tmp_path) -> None:
+    dates = pd.bdate_range("2025-01-01", periods=200)
+    cached = pd.DataFrame(
+        {"Close": range(100, 300), "Volume": [1_000] * 200}, index=dates
+    )
+    cache = data.MarketHistoryCache(tmp_path / "market")
+    cache.save("TEST", cached)
+    requested_periods = []
+
+    def download(symbols, period, attempts=2):
+        del attempts
+        requested_periods.append(period)
+        update = pd.DataFrame(
+            {"Close": [301.0, 302.0], "Volume": [1_100, 1_200]},
+            index=pd.bdate_range(dates[-1] + pd.Timedelta(days=1), periods=2),
+        )
+        return {symbols[0]: update}, [], 0
+
+    monkeypatch.setattr(data, "_market_history_cache", lambda: cache)
+    monkeypatch.setattr(data, "_download_history_chunk", download)
+    monkeypatch.setenv("STOCKFINDER_HISTORY_MAX_AGE_HOURS", "0")
+    data.get_batch_histories.cache_clear()
+
+    result = data.get_batch_histories(("TEST",), "1y")
+
+    assert requested_periods == ["1mo"]
+    assert result.data["TEST"]["Close"].iloc[-1] == 302.0

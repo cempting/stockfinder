@@ -16,6 +16,7 @@ dependencies = [
     "pandas>=2.2",
     "pillow>=11.0",
     "plotly>=6.0",
+    "pyarrow>=18.0",
     "streamlit>=1.45",
     "yfinance>=0.2.54",
 ]

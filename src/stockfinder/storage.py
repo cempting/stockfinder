@@ -1,15 +1,131 @@
 """SQLite persistence for user-owned research data."""
 
 import json
+import os
 import shutil
 import sqlite3
 from contextlib import closing
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from tempfile import mkdtemp
+from tempfile import gettempdir, mkdtemp
+from uuid import uuid4
 
 import pandas as pd
+
+
+def application_data_dir() -> Path:
+    """Return the writable application-state directory for local or cloud use."""
+    configured = os.environ.get("STOCKFINDER_DATA_DIR")
+    path = Path(configured).expanduser() if configured else Path("data")
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        probe = path / ".write-test"
+        probe.touch()
+        probe.unlink()
+        return path
+    except OSError:
+        fallback = Path(gettempdir()) / "stockfinder"
+        fallback.mkdir(parents=True, exist_ok=True)
+        return fallback
+
+
+class MarketHistoryCache:
+    """Persist last-known-good daily OHLCV histories by symbol."""
+
+    def __init__(self, path: str | Path | None = None) -> None:
+        self.path = (
+            Path(path) if path is not None else application_data_dir() / "market"
+        )
+        self.path.mkdir(parents=True, exist_ok=True)
+
+    def _path_for(self, symbol: str) -> Path:
+        safe_symbol = symbol.upper().replace("/", "_").replace("^", "INDEX_")
+        return self.path / f"{safe_symbol}.parquet"
+
+    def load(self, symbol: str) -> pd.DataFrame | None:
+        path = self._path_for(symbol)
+        if not path.exists():
+            return None
+        try:
+            frame = pd.read_parquet(path)
+            if frame.empty or "Close" not in frame:
+                return None
+            return frame.sort_index()
+        except (OSError, ValueError):
+            return None
+
+    def save(self, symbol: str, history: pd.DataFrame) -> None:
+        if history.empty:
+            return
+        path = self._path_for(symbol)
+        temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+        try:
+            history.sort_index().to_parquet(temporary)
+            temporary.replace(path)
+        finally:
+            if temporary.exists():
+                temporary.unlink()
+
+    def merge(self, symbol: str, history: pd.DataFrame) -> pd.DataFrame:
+        cached = self.load(symbol)
+        frames = [frame for frame in (cached, history) if frame is not None]
+        merged = pd.concat(frames).sort_index()
+        merged = merged[~merged.index.duplicated(keep="last")]
+        self.save(symbol, merged)
+        return merged
+
+    def is_fresh(self, symbol: str, max_age_hours: float) -> bool:
+        path = self._path_for(symbol)
+        if not path.exists():
+            return False
+        age_seconds = datetime.now(UTC).timestamp() - path.stat().st_mtime
+        return age_seconds <= max_age_hours * 60 * 60
+
+
+class CompanyProfileCache:
+    """Persist last-known-good provider profiles as atomic JSON files."""
+
+    def __init__(self, path: str | Path | None = None) -> None:
+        self.path = (
+            Path(path)
+            if path is not None
+            else application_data_dir() / "profiles"
+        )
+        self.path.mkdir(parents=True, exist_ok=True)
+
+    def _path_for(self, symbol: str) -> Path:
+        safe_symbol = symbol.upper().replace("/", "_").replace("^", "INDEX_")
+        return self.path / f"{safe_symbol}.json"
+
+    def load(self, symbol: str) -> dict | None:
+        path = self._path_for(symbol)
+        if not path.exists():
+            return None
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            return payload if isinstance(payload, dict) and payload else None
+        except (OSError, json.JSONDecodeError):
+            return None
+
+    def save(self, symbol: str, profile: dict) -> None:
+        if not profile:
+            return
+        path = self._path_for(symbol)
+        temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+        try:
+            temporary.write_text(json.dumps(profile, default=str), encoding="utf-8")
+            temporary.replace(path)
+        finally:
+            if temporary.exists():
+                temporary.unlink()
+
+    def is_fresh(self, symbol: str, max_age_hours: float) -> bool:
+        path = self._path_for(symbol)
+        if not path.exists():
+            return False
+        age_seconds = datetime.now(UTC).timestamp() - path.stat().st_mtime
+        return age_seconds <= max_age_hours * 60 * 60
 
 
 @dataclass(frozen=True)
