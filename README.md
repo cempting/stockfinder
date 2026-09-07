@@ -66,6 +66,19 @@ The container runs as a non-root user, listens on `0.0.0.0`, honors the platform
 between deployments. Without a volume, the app still runs but container state is
 ephemeral.
 
+### Streamlit Community Cloud
+
+Create or edit the app with these settings:
+
+- Repository: `cempting/stockfinder`
+- Branch: `main`
+- Main file path: `streamlit_app.py`
+
+The root entry point adds this repository's `src` directory before importing the
+application, preventing a cached or unrelated installed `stockfinder` package from
+shadowing the deployed source. After changing the main file path, reboot the app
+from **Manage app** to clear the previous Python process.
+
 ## Current Features
 
 - Market pulse for major US indices and cross-asset proxies

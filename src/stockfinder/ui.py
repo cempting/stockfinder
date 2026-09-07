@@ -40,12 +40,12 @@ from stockfinder.data import (
     get_profile,
 )
 from stockfinder.models import Score, SwingSetup
+from stockfinder.runtime import application_data_dir
 from stockfinder.scoring import score_fundamentals
 from stockfinder.storage import (
     Repository,
     ScanSnapshot,
     ScanSnapshotStore,
-    application_data_dir,
 )
 
 MARKET_SCAN_VERSION = "2026-09-early-rotation-v11"

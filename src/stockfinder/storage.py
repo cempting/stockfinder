@@ -1,33 +1,18 @@
 """SQLite persistence for user-owned research data."""
 
 import json
-import os
 import shutil
 import sqlite3
 from contextlib import closing
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from tempfile import gettempdir, mkdtemp
+from tempfile import mkdtemp
 from uuid import uuid4
 
 import pandas as pd
 
-
-def application_data_dir() -> Path:
-    """Return the writable application-state directory for local or cloud use."""
-    configured = os.environ.get("STOCKFINDER_DATA_DIR")
-    path = Path(configured).expanduser() if configured else Path("data")
-    try:
-        path.mkdir(parents=True, exist_ok=True)
-        probe = path / ".write-test"
-        probe.touch()
-        probe.unlink()
-        return path
-    except OSError:
-        fallback = Path(gettempdir()) / "stockfinder"
-        fallback.mkdir(parents=True, exist_ok=True)
-        return fallback
+from stockfinder.runtime import application_data_dir
 
 
 class MarketHistoryCache:
