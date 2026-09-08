@@ -48,7 +48,7 @@ from stockfinder.storage import (
     ScanSnapshotStore,
 )
 
-MARKET_SCAN_VERSION = "2026-09-early-rotation-v11"
+MARKET_SCAN_VERSION = "2026-09-promising-evidence-v12"
 WORKSPACE_PAGES = (
     "Market pulse",
     "Rotation leaders",
@@ -482,6 +482,7 @@ def _stocks_discovery_page(load_mode: str) -> None:
         exchanges = exchange_column.multiselect(
             "Exchanges", sorted(stocks["Exchange"].dropna().unique())
         )
+    promising_filters = _promising_filter_controls("stocks")
     with st.expander("Price, setup, and risk filters", expanded=True):
         states = st.multiselect(
             "Setup states", sorted(stocks["Setup state"].dropna().unique())
@@ -506,7 +507,7 @@ def _stocks_discovery_page(load_mode: str) -> None:
         }[cap_label]
         setup_score_column, risk_column, volatility_column = st.columns(3)
         minimum_setup_display = setup_score_column.slider(
-            "Minimum setup score", 1, 10, 5, 1
+            "Minimum setup score", 1, 10, 1, 1
         )
         minimum_safety = risk_column.slider("Minimum safety score", 1, 10, 2, 1)
         minimum_setup = _raw_score_threshold(minimum_setup_display)
@@ -514,9 +515,6 @@ def _stocks_discovery_page(load_mode: str) -> None:
         maximum_volatility = volatility_column.slider(
             "Maximum annualized volatility %", 10, 200, 100, 5
         )
-        sma50_column, sma150_column = st.columns(2)
-        require_sma50 = sma50_column.toggle("Require price above SMA50")
-        require_sma150 = sma150_column.toggle("Require price above SMA150")
 
     filtered = _filter_market_stocks(
         stocks,
@@ -532,22 +530,25 @@ def _stocks_discovery_page(load_mode: str) -> None:
         minimum_setup=minimum_setup,
         maximum_risk=maximum_risk,
         maximum_volatility=maximum_volatility,
-        require_sma50=require_sma50,
-        require_sma150=require_sma150,
+        require_sma50=False,
+        require_sma150=False,
     )
+    filtered = _filter_promising_stocks(filtered, **promising_filters)
     sort_label = st.selectbox(
         "Rank by",
-        ["Setup score", "Market cap", "Day performance", "Highest safety"],
+        [
+            "Setup score",
+            "Longest heartbeat base",
+            "Nearest SMA50",
+            "Fastest-rising SMA50",
+            "Strongest volume interest",
+            "Market cap",
+            "Day performance",
+            "Highest safety",
+        ],
+        key="stocks_candidate_ranking",
     )
-    sort_column, ascending = {
-        "Setup score": ("Setup score", False),
-        "Market cap": ("Market cap", False),
-        "Day performance": ("Day %", False),
-        "Highest safety": ("Market risk", True),
-    }[sort_label]
-    filtered = filtered.sort_values(
-        sort_column, ascending=ascending, na_position="last"
-    )
+    filtered = _rank_promising_stocks(filtered, sort_label)
     st.caption(f"Showing {len(filtered):,} of {len(stocks):,} filterable stocks")
     if filtered.empty:
         st.info("No stocks match the current filters.")
@@ -644,6 +645,16 @@ def _stock_discovery_columns() -> dict[str, object]:
         "ATR %": st.column_config.NumberColumn(format="%.1f%%"),
         "From pivot %": st.column_config.NumberColumn(format="%+.1f%%"),
         "Breakout volume": st.column_config.NumberColumn(format="%.2fx"),
+        "Heartbeat base": st.column_config.CheckboxColumn(disabled=True),
+        "Base sessions": st.column_config.NumberColumn(format="%d"),
+        "Heartbeat turns": st.column_config.NumberColumn(format="%d"),
+        "Near SMA50": st.column_config.CheckboxColumn(disabled=True),
+        "Crossed SMA50 recently": st.column_config.CheckboxColumn(disabled=True),
+        "Distance to SMA50 %": st.column_config.NumberColumn(format="%+.1f%%"),
+        "SMA50 rising": st.column_config.CheckboxColumn(disabled=True),
+        "SMA50 slope 20D %": st.column_config.NumberColumn(format="%+.1f%%"),
+        "Volume increasing": st.column_config.CheckboxColumn(disabled=True),
+        "Volume trend ratio": st.column_config.NumberColumn(format="%.2fx"),
         **progress,
     }
 
@@ -1528,22 +1539,8 @@ def _sector_page(load_mode: str) -> None:
             how="left",
         )
     available_states = stocks["Setup state"].dropna().unique().tolist()
+    promising_filters = _promising_filter_controls("industries")
     with st.expander("Technical and price-chart filters", expanded=True):
-        st.markdown("**Core rules**")
-        (
-            sma50_column,
-            sma150_column,
-            volume_rule_column,
-            base_rule_column,
-        ) = st.columns(4)
-        require_sma50 = sma50_column.toggle("Price above SMA50", value=True)
-        require_sma150 = sma150_column.toggle("Price above SMA150", value=True)
-        require_volume = volume_rule_column.toggle("Volume Evidence", value=False)
-        require_base = base_rule_column.toggle("Consolidation base", value=True)
-        st.caption(
-            "Volume Evidence requires at least 1.5x the 50-day average. "
-            "Consolidation requires a base no wider than 15% with controlled volume."
-        )
         setup_states = st.multiselect(
             "Setup states",
             available_states,
@@ -1553,20 +1550,11 @@ def _sector_page(load_mode: str) -> None:
                 "and rejected states remain available when core rules are disabled."
             ),
         )
-        setup_column, volume_column = st.columns(2)
+        setup_column, volatility_column, risk_column = st.columns(3)
         minimum_setup_display = setup_column.slider(
-            "Minimum setup score", 1, 10, 6, 1
+            "Minimum setup score", 1, 10, 1, 1
         )
         minimum_setup = _raw_score_threshold(minimum_setup_display)
-        minimum_volume = volume_column.slider(
-            "Minimum volume / 50-day average",
-            1.5,
-            3.0,
-            1.5,
-            0.1,
-            disabled=not require_volume,
-        )
-        volatility_column, risk_column = st.columns(2)
         maximum_volatility = volatility_column.slider(
             "Maximum annualized volatility %", 20, 200, 100, 5
         )
@@ -1574,37 +1562,21 @@ def _sector_page(load_mode: str) -> None:
             "Minimum safety score", 1, 10, 2, 1
         )
         maximum_risk = _raw_risk_limit(minimum_safety)
-        base_column, pivot_column = st.columns(2)
-        maximum_base_width = base_column.slider(
-            "Maximum consolidation width %",
-            5,
-            20,
-            15,
-            1,
-            disabled=not require_base,
-        )
-        maximum_pivot_distance = pivot_column.slider(
-            "Maximum distance from pivot %",
-            1,
-            20,
-            8,
-            1,
-            disabled=not require_base,
-        )
     stocks = _filter_technical_candidates(
         stocks,
         tuple(setup_states),
         minimum_setup,
-        minimum_volume,
+        0.0,
         maximum_volatility,
         maximum_risk,
-        maximum_base_width,
-        maximum_pivot_distance,
-        require_sma50,
-        require_sma150,
-        require_volume,
-        require_base,
+        100.0,
+        100.0,
+        False,
+        False,
+        False,
+        False,
     )
+    stocks = _filter_promising_stocks(stocks, **promising_filters)
     if stocks.empty:
         st.info("No stocks match the selected technical and risk filters.")
         return
@@ -1653,6 +1625,19 @@ def _sector_page(load_mode: str) -> None:
     stocks["Setup interpretation"] = stocks["Setup score"].map(
         _candidate_score_context
     )
+    rank_label = st.selectbox(
+        "Rank candidates by",
+        [
+            "Setup score",
+            "Longest heartbeat base",
+            "Nearest SMA50",
+            "Fastest-rising SMA50",
+            "Strongest volume interest",
+            "Highest safety",
+        ],
+        key="industry_candidate_ranking",
+    )
+    stocks = _rank_promising_stocks(stocks, rank_label)
     stocks_display = _display_score_columns(
         stocks,
         ("Growth", "Quality", "Financial strength", "Valuation", "Setup score"),
@@ -1684,6 +1669,19 @@ def _sector_page(load_mode: str) -> None:
                 disabled=True,
                 help="Base width is at most 15% and base volume is controlled.",
             ),
+            "Heartbeat base": st.column_config.CheckboxColumn(
+                disabled=True,
+                help="Controlled base with at least two price-direction changes.",
+            ),
+            "Base sessions": st.column_config.NumberColumn(format="%d"),
+            "Heartbeat turns": st.column_config.NumberColumn(format="%d"),
+            "Near SMA50": st.column_config.CheckboxColumn(disabled=True),
+            "Crossed SMA50 recently": st.column_config.CheckboxColumn(disabled=True),
+            "Distance to SMA50 %": st.column_config.NumberColumn(format="%+.1f%%"),
+            "SMA50 rising": st.column_config.CheckboxColumn(disabled=True),
+            "SMA50 slope 20D %": st.column_config.NumberColumn(format="%+.1f%%"),
+            "Volume increasing": st.column_config.CheckboxColumn(disabled=True),
+            "Volume trend ratio": st.column_config.NumberColumn(format="%.2fx"),
             "Price": st.column_config.NumberColumn(
                 format="%.2f", help="Latest daily close in the listing currency."
             ),
@@ -2401,6 +2399,127 @@ def _filter_market_stocks(
     return stocks.loc[mask].copy()
 
 
+PROMISING_CRITERIA = (
+    "Heartbeat consolidation",
+    "SMA50 breakout opportunity",
+    "Rising SMA50",
+    "Increasing volume",
+    "Above SMA150 (long-term)",
+)
+
+
+def _promising_filter_controls(key_prefix: str) -> dict[str, object]:
+    with st.expander("Promising stock criteria", expanded=True):
+        criteria = st.multiselect(
+            "Require evidence",
+            PROMISING_CRITERIA,
+            default=[],
+            key=f"{key_prefix}_promising_criteria",
+            help=(
+                "Only selected criteria are required; selected criteria combine "
+                "with AND."
+            ),
+        )
+        base_column, sma50_column, volume_column = st.columns(3)
+        minimum_base_sessions = base_column.slider(
+            "Minimum base length",
+            5,
+            20,
+            10,
+            1,
+            key=f"{key_prefix}_minimum_base_sessions",
+            disabled="Heartbeat consolidation" not in criteria,
+            help=(
+                "Longer controlled bases receive preference; the scan tests "
+                "5–20 sessions."
+            ),
+        )
+        maximum_sma50_distance = sma50_column.slider(
+            "Maximum distance to SMA50 %",
+            1.0,
+            10.0,
+            5.0,
+            0.5,
+            key=f"{key_prefix}_maximum_sma50_distance",
+            disabled="SMA50 breakout opportunity" not in criteria,
+            help=(
+                "Absolute distance above or below SMA50; smaller is nearer to "
+                "crossing."
+            ),
+        )
+        minimum_volume_ratio = volume_column.slider(
+            "Minimum volume trend",
+            1.0,
+            2.0,
+            1.1,
+            0.05,
+            key=f"{key_prefix}_minimum_volume_ratio",
+            disabled="Increasing volume" not in criteria,
+            help=(
+                "Recent 10-day average volume divided by the preceding 40-day "
+                "average."
+            ),
+        )
+        st.caption(
+            "Heartbeat requires a controlled ≤15% base with at least two price "
+            "direction changes. SMA150 is optional and intended for longer-term "
+            "investing rather than the core swing setup."
+        )
+    return {
+        "criteria": tuple(criteria),
+        "minimum_base_sessions": minimum_base_sessions,
+        "maximum_sma50_distance": maximum_sma50_distance,
+        "minimum_volume_ratio": minimum_volume_ratio,
+    }
+
+
+def _filter_promising_stocks(
+    stocks: pd.DataFrame,
+    criteria: tuple[str, ...],
+    minimum_base_sessions: int = 7,
+    maximum_sma50_distance: float = 5.0,
+    minimum_volume_ratio: float = 1.10,
+) -> pd.DataFrame:
+    """Require only the independently selected promising-stock evidence."""
+    if stocks.empty or not criteria:
+        return stocks.copy()
+    mask = pd.Series(True, index=stocks.index)
+    if "Heartbeat consolidation" in criteria:
+        mask &= stocks["Heartbeat base"].fillna(False)
+        mask &= stocks["Base sessions"].fillna(0) >= minimum_base_sessions
+    if "SMA50 breakout opportunity" in criteria:
+        mask &= (
+            stocks["Distance to SMA50 %"].abs().fillna(float("inf"))
+            <= maximum_sma50_distance
+        )
+    if "Rising SMA50" in criteria:
+        mask &= stocks["SMA50 rising"].fillna(False)
+    if "Increasing volume" in criteria:
+        mask &= stocks["Volume trend ratio"].fillna(0) >= minimum_volume_ratio
+    if "Above SMA150 (long-term)" in criteria:
+        mask &= stocks["Price above SMA150"].fillna(False)
+    return stocks.loc[mask].copy()
+
+
+def _rank_promising_stocks(stocks: pd.DataFrame, ranking: str) -> pd.DataFrame:
+    if stocks.empty:
+        return stocks.copy()
+    if ranking == "Nearest SMA50":
+        return stocks.loc[
+            stocks["Distance to SMA50 %"].abs().sort_values().index
+        ].copy()
+    column, ascending = {
+        "Setup score": ("Setup score", False),
+        "Longest heartbeat base": ("Base sessions", False),
+        "Fastest-rising SMA50": ("SMA50 slope 20D %", False),
+        "Strongest volume interest": ("Volume trend ratio", False),
+        "Market cap": ("Market cap", False),
+        "Day performance": ("Day %", False),
+        "Highest safety": ("Market risk", True),
+    }[ranking]
+    return stocks.sort_values(column, ascending=ascending, na_position="last")
+
+
 def _filter_technical_candidates(
     stocks: pd.DataFrame,
     states: tuple[str, ...],
@@ -2702,15 +2821,17 @@ def _methodology_page(load_mode: str) -> None:
     )
     st.write(
         "The cached stock pool includes every stock with sufficient history in a "
-        "Gaining industry. Rotation Leaders can independently require Price above "
-        "SMA50, Price above SMA150, Volume Evidence, and a Consolidation base. "
-        "Disabling a rule genuinely exposes stocks that fail that evidence check."
+        "Gaining industry. Promising stock criteria are independent selectable "
+        "filters: heartbeat consolidation, SMA50 crossing opportunity, rising "
+        "SMA50, increasing volume, and optional price above SMA150."
     )
     st.write(
-        "Volume Evidence requires at least 1.5x the 50-day average. Consolidation "
-        "requires an adaptive 5–20 session base no wider than 15%, with controlled "
-        "base volume. Numeric thresholds and fundamental attributes can then refine "
-        "the enabled core rules. Moat remains a separate qualitative review."
+        "Heartbeat requires a controlled base no wider than 15%, at least two "
+        "direction changes, and the selected minimum duration. SMA50 opportunity "
+        "uses absolute distance above or below SMA50. Rising SMA50 requires a "
+        "positive 20-session slope. Increasing volume compares the recent 10-day "
+        "average with the preceding 40 days. SMA150 is intended as longer-term "
+        "investment confirmation rather than a core swing requirement."
     )
     st.write(
         "Stock research classifies the long swing rule as Ready near pivot, "
@@ -3076,6 +3197,41 @@ def _risk_panel(result: AnalysisResult) -> None:
         "Breakout volume",
         f"{setup.metrics.get('Breakout volume ratio', 0):.2f}x",
         help="Latest volume / 50-day average; at least 1.50x confirms.",
+    )
+    heartbeat, sma50_distance, sma50_slope, volume_trend = st.columns(4)
+    heartbeat.metric(
+        "Heartbeat turns",
+        f"{setup.metrics.get('Heartbeat turns', 0):.0f}",
+        help=(
+            "Price-direction reversals inside the selected sideways base; "
+            "2+ qualifies."
+        ),
+    )
+    sma50_distance.metric(
+        "Distance to SMA50",
+        f"{setup.metrics.get('Distance to SMA50 %', 0):+.1f}%",
+        (
+            "Crossed recently"
+            if setup.metrics.get("Crossed SMA50 recently", 0)
+            else None
+        ),
+        help=(
+            "Absolute distance up to the chosen threshold indicates a crossing "
+            "opportunity."
+        ),
+    )
+    sma50_slope.metric(
+        "SMA50 slope · 20D",
+        f"{setup.metrics.get('SMA50 slope 20D %', 0):+.1f}%",
+        help="Positive means the 50-day average is rising.",
+    )
+    volume_trend.metric(
+        "Volume interest",
+        f"{setup.metrics.get('Volume trend ratio', 0):.2f}x",
+        help=(
+            "Recent 10-day average volume / preceding 40-day average; "
+            "1.10x+ qualifies."
+        ),
     )
 
     stop_levels = {

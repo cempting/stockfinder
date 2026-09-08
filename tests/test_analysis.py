@@ -410,6 +410,15 @@ def test_breakout_candidates_retain_independent_filter_evidence() -> None:
     assert bool(evidence.loc["BASE", "Price above SMA50"])
     assert bool(evidence.loc["BASE", "Price above SMA150"])
     assert bool(evidence.loc["BASE", "Consolidation base"])
+    assert "Base sessions" in evidence
+    assert "Heartbeat base" in evidence
+    assert "Heartbeat turns" in evidence
+    assert "Distance to SMA50 %" in evidence
+    assert "Crossed SMA50 recently" in evidence
+    assert "SMA50 rising" in evidence
+    assert "SMA50 slope 20D %" in evidence
+    assert "Volume increasing" in evidence
+    assert "Volume trend ratio" in evidence
     assert not bool(evidence.loc["DOWN", "Price above SMA50"])
     assert not bool(evidence.loc["DOWN", "Price above SMA150"])
     assert not bool(evidence.loc["BASE", "Volume Evidence"])

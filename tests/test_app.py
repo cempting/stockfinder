@@ -7,17 +7,20 @@ import pandas as pd
 from stockfinder.app import main
 from stockfinder.models import Score, SwingSetup
 from stockfinder.ui import (
+    PROMISING_CRITERIA,
     _consume_pending_navigation,
     _enrich_with_cached_risk,
     _ensure_rotation_columns,
     _filter_fundamental_candidates,
     _filter_market_stocks,
+    _filter_promising_stocks,
     _filter_technical_candidates,
     _fundamental_evidence_frame,
     _fundamental_signal,
     _industry_proxy,
     _industry_proxy_thumbnail,
     _metal_summary,
+    _rank_promising_stocks,
     _raw_risk_limit,
     _raw_score_threshold,
     _safety_score_10,
@@ -363,6 +366,45 @@ def test_global_stock_filters_compose_market_risk_and_setup_rules() -> None:
     )
 
     assert filtered["Symbol"].tolist() == ["USPASS"]
+
+
+def test_promising_stock_criteria_are_independently_selectable() -> None:
+    stocks = pd.DataFrame(
+        {
+            "Symbol": ["ALL", "SHORT", "FAR", "FLAT", "QUIET", "BELOW150"],
+            "Heartbeat base": [True, True, True, True, True, True],
+            "Base sessions": [15, 5, 15, 15, 15, 15],
+            "Distance to SMA50 %": [1.0, 1.0, 8.0, 1.0, 1.0, 1.0],
+            "SMA50 rising": [True, True, True, False, True, True],
+            "Volume trend ratio": [1.3, 1.3, 1.3, 1.3, 1.0, 1.3],
+            "Price above SMA150": [True, True, True, True, True, False],
+        }
+    )
+
+    heartbeat = _filter_promising_stocks(
+        stocks, ("Heartbeat consolidation",), minimum_base_sessions=10
+    )
+    all_criteria = _filter_promising_stocks(stocks, PROMISING_CRITERIA)
+
+    assert "SHORT" not in heartbeat["Symbol"].tolist()
+    assert set(heartbeat["Symbol"]) == {"ALL", "FAR", "FLAT", "QUIET", "BELOW150"}
+    assert all_criteria["Symbol"].tolist() == ["ALL"]
+
+
+def test_promising_stocks_can_rank_by_base_and_sma50_proximity() -> None:
+    stocks = pd.DataFrame(
+        {
+            "Symbol": ["NEAR", "LONG"],
+            "Distance to SMA50 %": [0.5, 4.0],
+            "Base sessions": [7, 20],
+        }
+    )
+
+    nearest = _rank_promising_stocks(stocks, "Nearest SMA50")
+    longest = _rank_promising_stocks(stocks, "Longest heartbeat base")
+
+    assert nearest["Symbol"].tolist() == ["NEAR", "LONG"]
+    assert longest["Symbol"].tolist() == ["LONG", "NEAR"]
 
 
 def test_stock_discovery_frame_joins_market_and_cached_risk_evidence() -> None:

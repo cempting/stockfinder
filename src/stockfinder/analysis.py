@@ -702,6 +702,9 @@ def breakout_candidates(
             continue
         setup = analyze_long_swing_setup(history)
         close = history["Close"].dropna()
+        distance_to_sma50 = setup.metrics["Distance to SMA50 %"]
+        crossed_sma50_recently = bool(setup.metrics["Crossed SMA50 recently"])
+        volume_trend_ratio = setup.metrics["Volume trend ratio"]
         returns = close.pct_change().dropna()
         volatility = float(returns.std() * np.sqrt(252) * 100)
         drawdown = close / close.cummax() - 1
@@ -726,16 +729,31 @@ def breakout_candidates(
                 "Price": float(close.iloc[-1]),
                 "Setup state": setup.state,
                 "Price above SMA50": setup.checks.get("Price above SMA50", False),
+                "Near SMA50": abs(distance_to_sma50) <= 5.0,
+                "Crossed SMA50 recently": crossed_sma50_recently,
+                "Distance to SMA50 %": round(distance_to_sma50, 1),
+                "SMA50 rising": setup.checks.get("SMA50 rising", False),
+                "SMA50 slope 20D %": round(
+                    setup.metrics["SMA50 slope 20D %"], 1
+                ),
                 "Price above SMA150": setup.checks.get("Price above SMA150", False),
                 "Volume Evidence": setup.checks.get(
                     "Breakout volume at least 1.5x", False
                 ),
                 "Consolidation base": consolidation,
+                "Heartbeat base": bool(
+                    consolidation
+                    and setup.metrics["Base length sessions"] >= 7
+                    and setup.metrics["Heartbeat turns"] >= 2
+                ),
                 "Pivot": setup.pivot,
                 "Base sessions": int(setup.metrics["Base length sessions"]),
+                "Heartbeat turns": int(setup.metrics["Heartbeat turns"]),
                 "Base range %": round(setup.metrics["Base range %"], 1),
                 "From pivot %": round(-setup.metrics["Distance to pivot %"], 1),
                 "Breakout volume": round(setup.metrics["Breakout volume ratio"], 2),
+                "Volume increasing": volume_trend_ratio >= 1.10,
+                "Volume trend ratio": round(volume_trend_ratio, 2),
                 "Volatility %": round(volatility, 1),
                 "Max drawdown %": round(float(drawdown.min() * 100), 1),
                 "Setup score": setup.score,
@@ -774,9 +792,22 @@ def analyze_long_swing_setup(history: pd.DataFrame) -> SwingSetup:
     )
     base_volume = float(base["Volume"].median())
     base_volume_ratio = base_volume / prior_volume if prior_volume > 0 else float("inf")
+    directions = np.sign(base["Close"].diff().dropna())
+    directions = directions[directions != 0]
+    heartbeat_turns = int((directions != directions.shift(1)).sum() - 1)
+    heartbeat_turns = max(0, heartbeat_turns)
     average_volume = float(volume50.iloc[-1])
     breakout_volume = (
         float(latest["Volume"]) / average_volume if average_volume > 0 else 0.0
+    )
+    recent_volume = float(frame["Volume"].tail(10).mean())
+    baseline_volume = float(frame["Volume"].iloc[-50:-10].mean())
+    volume_trend_ratio = (
+        recent_volume / baseline_volume if baseline_volume > 0 else 0.0
+    )
+    distance_to_sma50 = float((latest_close / sma50.iloc[-1] - 1) * 100)
+    crossed_sma50_recently = bool(
+        latest_close >= sma50.iloc[-1] and close.iloc[-6] < sma50.iloc[-6]
     )
     day_range = max(0.01, float(latest["High"] - latest["Low"]))
     close_location = float((latest_close - latest["Low"]) / day_range)
@@ -849,14 +880,18 @@ def analyze_long_swing_setup(history: pd.DataFrame) -> SwingSetup:
         "Close": latest_close,
         "SMA50": float(sma50.iloc[-1]),
         "SMA150": float(sma150.iloc[-1]),
+        "Distance to SMA50 %": distance_to_sma50,
+        "Crossed SMA50 recently": float(crossed_sma50_recently),
         "SMA50 slope 20D %": float((sma50.iloc[-1] / sma50.iloc[-20] - 1) * 100),
         "SMA150 slope 20D %": float((sma150.iloc[-1] / sma150.iloc[-20] - 1) * 100),
         "Base length sessions": float(base_length),
+        "Heartbeat turns": float(heartbeat_turns),
         "Base range %": base_range * 100,
         "Distance to pivot %": distance_to_pivot * 100,
         "Prior advance %": prior_advance * 100,
         "Base volume ratio": base_volume_ratio,
         "Breakout volume ratio": breakout_volume,
+        "Volume trend ratio": volume_trend_ratio,
         "Breakout close location %": close_location * 100,
         "ATR14": atr,
     }
