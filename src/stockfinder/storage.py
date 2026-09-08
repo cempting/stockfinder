@@ -36,6 +36,9 @@ class MarketHistoryCache:
             frame = pd.read_parquet(path)
             if frame.empty or "Close" not in frame:
                 return None
+            if isinstance(frame.index, pd.DatetimeIndex):
+                frame.index = frame.index.tz_localize(None).normalize()
+                frame = frame[~frame.index.duplicated(keep="last")]
             return frame.sort_index()
         except (OSError, ValueError):
             return None
@@ -43,6 +46,10 @@ class MarketHistoryCache:
     def save(self, symbol: str, history: pd.DataFrame) -> None:
         if history.empty:
             return
+        history = history.copy()
+        if isinstance(history.index, pd.DatetimeIndex):
+            history.index = history.index.tz_localize(None).normalize()
+            history = history[~history.index.duplicated(keep="last")]
         path = self._path_for(symbol)
         temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
         try:

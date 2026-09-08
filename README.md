@@ -89,6 +89,7 @@ from **Manage app** to clear the previous Python process.
 - Composable market, classification, price, setup, trend, and risk filters
 - Independent promising-stock filters for heartbeat consolidation, SMA50 crossing
 	opportunity, rising SMA50, increasing volume, and optional SMA150 confirmation
+- Any/All matching policy to combine promising criteria with OR or AND logic
 - Optional cached fundamental enrichment for narrowed stock shortlists
 - Always-on 1-week, 1-month, 3-month, and 6-month industry liquidity analysis
 - Secondary early-rotation signal for breadth, relative strength, dollar volume,

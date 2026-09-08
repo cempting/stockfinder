@@ -20,6 +20,7 @@ from stockfinder.ui import (
     _industry_proxy,
     _industry_proxy_thumbnail,
     _metal_summary,
+    _metals_performance_chart,
     _rank_promising_stocks,
     _raw_risk_limit,
     _raw_score_threshold,
@@ -150,6 +151,25 @@ def test_metal_summary_does_not_treat_missing_benchmark_as_underperformance() ->
 
     assert "benchmark data is missing" in summary
     assert "underperforming" not in summary
+
+
+def test_metals_chart_aligns_mixed_timezone_histories() -> None:
+    naive_dates = pd.bdate_range("2026-01-01", periods=60)
+    aware_dates = naive_dates.tz_localize("America/New_York")
+    histories = {
+        "GLD": pd.DataFrame({"Close": range(100, 160)}, index=aware_dates),
+        "SLV": pd.DataFrame({"Close": range(80, 140)}, index=naive_dates),
+    }
+    ranked = pd.DataFrame(
+        {"Symbol": ["GLD", "SLV"], "Metal": ["Gold", "Silver"]}
+    )
+
+    figure = _metals_performance_chart(histories, ranked)
+    figure_data = figure.to_dict()["data"]
+
+    assert len(figure_data) == 2
+    for trace in figure_data:
+        assert pd.DatetimeIndex(trace["x"]).tz is None
 
 
 def test_fundamental_signal_uses_best_available_core_score() -> None:
@@ -385,10 +405,14 @@ def test_promising_stock_criteria_are_independently_selectable() -> None:
         stocks, ("Heartbeat consolidation",), minimum_base_sessions=10
     )
     all_criteria = _filter_promising_stocks(stocks, PROMISING_CRITERIA)
+    every_criterion = _filter_promising_stocks(
+        stocks, PROMISING_CRITERIA, require_all=True
+    )
 
     assert "SHORT" not in heartbeat["Symbol"].tolist()
     assert set(heartbeat["Symbol"]) == {"ALL", "FAR", "FLAT", "QUIET", "BELOW150"}
-    assert all_criteria["Symbol"].tolist() == ["ALL"]
+    assert set(all_criteria["Symbol"]) == set(stocks["Symbol"])
+    assert every_criterion["Symbol"].tolist() == ["ALL"]
 
 
 def test_promising_stocks_can_rank_by_base_and_sma50_proximity() -> None:
@@ -456,10 +480,11 @@ def test_industry_proxy_thumbnail_is_compact_and_selectable() -> None:
     )
 
     figure = _industry_proxy_thumbnail("SMH", "Semiconductors", history)
+    figure_data = figure.to_dict()
 
-    assert len(figure.data) == 2
-    assert figure.data[0].mode == "lines+markers"
-    assert figure.data[0].marker.opacity == 0
+    assert len(figure_data["data"]) == 2
+    assert figure_data["data"][0]["mode"] == "lines+markers"
+    assert figure_data["data"][0]["marker"]["opacity"] == 0
     assert figure.layout.height == 230
     assert figure.layout.clickmode == "event+select"
     assert not figure.layout.showlegend

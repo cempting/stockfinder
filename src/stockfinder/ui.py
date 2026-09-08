@@ -372,7 +372,10 @@ def _metals_performance_chart(
         history = histories.get(symbol)
         if history is None or history.empty:
             continue
-        close = history["Close"].dropna().tail(126)
+        close = history["Close"].dropna().tail(126).copy()
+        if isinstance(close.index, pd.DatetimeIndex):
+            close.index = close.index.tz_localize(None).normalize()
+            close = close[~close.index.duplicated(keep="last")]
         if not close.empty:
             series[str(metal)] = close / close.iloc[0] * 100
     performance = pd.DataFrame(series)
@@ -2410,14 +2413,22 @@ PROMISING_CRITERIA = (
 
 def _promising_filter_controls(key_prefix: str) -> dict[str, object]:
     with st.expander("Promising stock criteria", expanded=True):
-        criteria = st.multiselect(
-            "Require evidence",
+        criteria_column, policy_column = st.columns([2, 1])
+        criteria = criteria_column.multiselect(
+            "Evidence criteria",
             PROMISING_CRITERIA,
             default=[],
             key=f"{key_prefix}_promising_criteria",
+            help="Select one or more evidence signals to include in the filter.",
+        )
+        match_policy = policy_column.segmented_control(
+            "Match",
+            ["Any selected", "All selected"],
+            default="Any selected",
+            key=f"{key_prefix}_promising_match_policy",
             help=(
-                "Only selected criteria are required; selected criteria combine "
-                "with AND."
+                "Any selected keeps a stock when at least one criterion passes. "
+                "All selected requires every selected criterion."
             ),
         )
         base_column, sma50_column, volume_column = st.columns(3)
@@ -2467,6 +2478,7 @@ def _promising_filter_controls(key_prefix: str) -> dict[str, object]:
         )
     return {
         "criteria": tuple(criteria),
+        "require_all": match_policy == "All selected",
         "minimum_base_sessions": minimum_base_sessions,
         "maximum_sma50_distance": maximum_sma50_distance,
         "minimum_volume_ratio": minimum_volume_ratio,
@@ -2476,6 +2488,7 @@ def _promising_filter_controls(key_prefix: str) -> dict[str, object]:
 def _filter_promising_stocks(
     stocks: pd.DataFrame,
     criteria: tuple[str, ...],
+    require_all: bool = False,
     minimum_base_sessions: int = 7,
     maximum_sma50_distance: float = 5.0,
     minimum_volume_ratio: float = 1.10,
@@ -2483,21 +2496,27 @@ def _filter_promising_stocks(
     """Require only the independently selected promising-stock evidence."""
     if stocks.empty or not criteria:
         return stocks.copy()
-    mask = pd.Series(True, index=stocks.index)
+    evidence = []
     if "Heartbeat consolidation" in criteria:
-        mask &= stocks["Heartbeat base"].fillna(False)
-        mask &= stocks["Base sessions"].fillna(0) >= minimum_base_sessions
+        evidence.append(
+            stocks["Heartbeat base"].fillna(False)
+            & (stocks["Base sessions"].fillna(0) >= minimum_base_sessions)
+        )
     if "SMA50 breakout opportunity" in criteria:
-        mask &= (
+        evidence.append(
             stocks["Distance to SMA50 %"].abs().fillna(float("inf"))
             <= maximum_sma50_distance
         )
     if "Rising SMA50" in criteria:
-        mask &= stocks["SMA50 rising"].fillna(False)
+        evidence.append(stocks["SMA50 rising"].fillna(False))
     if "Increasing volume" in criteria:
-        mask &= stocks["Volume trend ratio"].fillna(0) >= minimum_volume_ratio
+        evidence.append(
+            stocks["Volume trend ratio"].fillna(0) >= minimum_volume_ratio
+        )
     if "Above SMA150 (long-term)" in criteria:
-        mask &= stocks["Price above SMA150"].fillna(False)
+        evidence.append(stocks["Price above SMA150"].fillna(False))
+    evidence_frame = pd.concat(evidence, axis=1)
+    mask = evidence_frame.all(axis=1) if require_all else evidence_frame.any(axis=1)
     return stocks.loc[mask].copy()
 
 
@@ -2823,7 +2842,9 @@ def _methodology_page(load_mode: str) -> None:
         "The cached stock pool includes every stock with sufficient history in a "
         "Gaining industry. Promising stock criteria are independent selectable "
         "filters: heartbeat consolidation, SMA50 crossing opportunity, rising "
-        "SMA50, increasing volume, and optional price above SMA150."
+        "SMA50, increasing volume, and optional price above SMA150. Any selected "
+        "keeps stocks matching at least one signal; All selected requires every "
+        "chosen signal."
     )
     st.write(
         "Heartbeat requires a controlled base no wider than 15%, at least two "

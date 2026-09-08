@@ -826,6 +826,8 @@ def _validate_history(history: pd.DataFrame) -> pd.DataFrame:
     if history.empty or "Close" not in history:
         return pd.DataFrame()
     frame = history.copy()
+    if isinstance(frame.index, pd.DatetimeIndex):
+        frame.index = frame.index.tz_localize(None).normalize()
     frame = frame[~frame.index.duplicated(keep="last")].sort_index()
     numeric_columns = [
         column
