@@ -1,5 +1,6 @@
 """Streamlit user interface for Stockfinder."""
 
+import json
 from collections.abc import MutableMapping
 from datetime import UTC, date, datetime
 from typing import Any
@@ -23,11 +24,14 @@ from stockfinder.analysis import (
     classify_market_regime,
     normalized_performance,
 )
+from stockfinder.config import (
+    AnalysisConfigStore,
+    configured_proxy,
+    geography_column,
+)
 from stockfinder.data import (
-    INDUSTRY_ETFS,
     METAL_PROXIES,
     METALS_BENCHMARK,
-    SECTOR_ETFS,
     SECURITY_UNIVERSE,
     DataResult,
     clear_market_data_caches,
@@ -43,6 +47,7 @@ from stockfinder.models import Score, SwingSetup
 from stockfinder.runtime import application_data_dir
 from stockfinder.scoring import score_fundamentals
 from stockfinder.storage import (
+    GettexInstrumentStore,
     Repository,
     ScanSnapshot,
     ScanSnapshotStore,
@@ -55,6 +60,7 @@ WORKSPACE_PAGES = (
     "Metals",
     "Stocks",
     "Portfolio",
+    "Settings",
     "Methodology",
 )
 WORKSPACE_LABELS = {
@@ -63,6 +69,7 @@ WORKSPACE_LABELS = {
     "Metals": "Metals",
     "Stocks": "Stocks",
     "Portfolio": "Portfolio",
+    "Settings": "Settings",
     "Methodology": "Methodology",
 }
 STOCKS_VIEWS = ("Discover", "Research", "Watchlist")
@@ -76,6 +83,16 @@ def repository() -> Repository:
 @st.cache_resource
 def scan_snapshot_store() -> ScanSnapshotStore:
     return ScanSnapshotStore(application_data_dir() / "latest_scan")
+
+
+@st.cache_resource
+def gettex_instrument_store() -> GettexInstrumentStore:
+    return GettexInstrumentStore(application_data_dir() / "gettex_instruments.csv")
+
+
+@st.cache_resource
+def analysis_config_store() -> AnalysisConfigStore:
+    return AnalysisConfigStore(application_data_dir() / "analysis_config.json")
 
 
 @st.cache_data(ttl=60 * 60 * 6, show_spinner=False)
@@ -155,6 +172,8 @@ def main() -> None:
         _stocks_page(load_mode)
     elif page == "Portfolio":
         _portfolio_page()
+    elif page == "Settings":
+        _settings_page()
     else:
         _methodology_page(load_mode)
 
@@ -182,6 +201,16 @@ def _sidebar() -> tuple[str, str]:
             key="workspace_page",
             format_func=WORKSPACE_LABELS.get,
         )
+        config = analysis_config_store().load()
+        profile_names = tuple(config["rule_profiles"])
+        if st.session_state.get("active_rule_profile") not in profile_names:
+            st.session_state["active_rule_profile"] = profile_names[0]
+        st.selectbox(
+            "Rule profile",
+            profile_names,
+            key="active_rule_profile",
+            help="Sets the initial stock-screening thresholds.",
+        )
         st.divider()
         with st.expander("Data controls"):
             extended = st.toggle(
@@ -198,6 +227,49 @@ def _sidebar() -> tuple[str, str]:
                 "Standard: 1 year / 200-symbol batches\n\n"
                 "Extended: 2 years / 100-symbol batches"
             )
+            st.divider()
+            st.markdown("**Broker trading list**")
+            gettex_store = gettex_instrument_store()
+            gettex_count = len(gettex_store.load())
+            st.caption(
+                f"{gettex_count:,} verified symbols imported"
+                if gettex_count
+                else "No broker list imported; availability is not verified."
+            )
+            st.caption(
+                "Availability only: prices, charts, and trade levels continue to "
+                "use the displayed Yahoo listing exchange and currency."
+            )
+            uploaded = st.file_uploader(
+                "Broker symbols CSV",
+                type="csv",
+                key="gettex_broker_csv",
+                help=(
+                    "CSV must contain Symbol, Ticker, Yahoo Symbol, or "
+                    "yahoo_symbol values matching the app's symbols."
+                ),
+            )
+            if st.button(
+                "Import broker list",
+                disabled=uploaded is None,
+                width="stretch",
+            ):
+                try:
+                    imported = gettex_store.import_csv(uploaded.getvalue())
+                    st.success(f"Imported {len(imported):,} broker symbols.")
+                    st.rerun()
+                except ValueError as error:
+                    st.error(str(error))
+            st.download_button(
+                "Download CSV template",
+                "Symbol\nSAP.DE\nAAPL\n",
+                "broker-symbol-template.csv",
+                "text/csv",
+                width="stretch",
+            )
+            if gettex_count and st.button("Clear broker list", width="stretch"):
+                gettex_store.clear()
+                st.rerun()
         st.caption("Daily data · refreshed after market close")
     return page, "extended" if extended else "standard"
 
@@ -467,6 +539,7 @@ def _stocks_discovery_page(load_mode: str) -> None:
         f"{len(universe.data):,} listings in the current market universe. "
         "Filterable rows require at least 170 sessions of usable price history."
     )
+    gettex_availability = _gettex_filter_control(stocks, "stocks_gettex_filter")
 
     search = st.text_input(
         "Search symbol or company", placeholder="AAPL or Apple", key="stocks_search"
@@ -536,6 +609,7 @@ def _stocks_discovery_page(load_mode: str) -> None:
         require_sma50=False,
         require_sma150=False,
     )
+    filtered = _filter_gettex_availability(filtered, gettex_availability)
     filtered = _filter_promising_stocks(filtered, **promising_filters)
     sort_label = st.selectbox(
         "Rank by",
@@ -595,7 +669,14 @@ def _stocks_discovery_page(load_mode: str) -> None:
         st.session_state["research_symbol"] = str(selected["Symbol"])
         st.session_state["research_listing"] = {
             key: selected.get(key)
-            for key in ("Symbol", "Region", "Country", "Exchange", "Currency")
+            for key in (
+                "Symbol",
+                "Region",
+                "Country",
+                "Exchange",
+                "Currency",
+                "GETTEX",
+            )
         }
         st.session_state["pending_stocks_workspace_view"] = "Research"
         st.rerun()
@@ -620,7 +701,45 @@ def _stock_discovery_frame(
         frame["Market risk"] = pd.NA
         frame["Risk label"] = "Unavailable"
         frame["ATR %"] = pd.NA
-    return frame
+    return _add_gettex_availability(frame)
+
+
+def _add_gettex_availability(frame: pd.DataFrame) -> pd.DataFrame:
+    enriched = frame.copy()
+    imported = gettex_instrument_store().load()
+    if imported.empty:
+        enriched["GETTEX"] = "Not verified"
+        return enriched
+    symbols = set(imported["Symbol"])
+    enriched["GETTEX"] = enriched["Symbol"].map(
+        lambda symbol: (
+            "Available" if str(symbol).upper() in symbols else "Not available"
+        )
+    )
+    return enriched
+
+
+def _filter_gettex_availability(
+    stocks: pd.DataFrame, availability: str
+) -> pd.DataFrame:
+    if stocks.empty or availability == "All":
+        return stocks.copy()
+    return stocks[stocks["GETTEX"] == availability].copy()
+
+
+def _gettex_filter_control(stocks: pd.DataFrame, key: str) -> str:
+    statuses = set(stocks["GETTEX"].dropna()) if "GETTEX" in stocks else set()
+    options = ["All", *sorted(statuses)]
+    return st.segmented_control(
+        "Broker availability",
+        options,
+        default="All",
+        key=key,
+        help=(
+            "Availability comes only from the imported broker symbol list. "
+            "Listing exchange is shown separately as the market-data source."
+        ),
+    ) or "All"
 
 
 def _stock_discovery_columns() -> dict[str, object]:
@@ -658,6 +777,10 @@ def _stock_discovery_columns() -> dict[str, object]:
         "SMA50 slope 20D %": st.column_config.NumberColumn(format="%+.1f%%"),
         "Volume increasing": st.column_config.CheckboxColumn(disabled=True),
         "Volume trend ratio": st.column_config.NumberColumn(format="%.2fx"),
+        "GETTEX": st.column_config.TextColumn(
+            "Broker availability",
+            help="Tradability confirmed by the imported broker symbol list.",
+        ),
         **progress,
     }
 
@@ -720,10 +843,13 @@ def _early_rotation_columns():
 def _load_scan(
     load_mode: str,
 ) -> tuple[DataResult, pd.DataFrame, pd.DataFrame, pd.DataFrame, str | None]:
+    config = analysis_config_store().load()
+    geography = config["geography_dimension"]
+    scan_model_version = f"{MARKET_SCAN_VERSION}-{geography}"
     refresh_token = st.session_state.get("market_refresh_token", 0)
     result_key = (
         f"broad_scan_result_{date.today().isoformat()}_{load_mode}_"
-        f"{MARKET_SCAN_VERSION}_{refresh_token}"
+        f"{scan_model_version}_{refresh_token}"
     )
     if result_key in st.session_state:
         return st.session_state[result_key]
@@ -733,7 +859,7 @@ def _load_scan(
         if (
             snapshot is not None
             and snapshot.mode == load_mode
-            and snapshot.model_version == MARKET_SCAN_VERSION
+            and snapshot.model_version == scan_model_version
             and not snapshot.risk_profiles.empty
         ):
             universe_result = DataResult(
@@ -765,6 +891,7 @@ def _load_scan(
     with st.status("Preparing broad market scan", expanded=True) as status:
         status.write("Refreshing US membership and curated international listings...")
         universe_result = cached_broad_universe(date.today().isoformat(), refresh_token)
+        universe_result = _apply_geography_dimension(universe_result, config)
         symbols = tuple(universe_result.data["Symbol"].tolist())
         status.write(f"Found {len(symbols):,} classified and curated listings.")
         progress = st.progress(0, text="Waiting for price batches")
@@ -826,7 +953,7 @@ def _load_scan(
             source=universe_result.source,
             coverage=coverage,
             mode=load_mode,
-            model_version=MARKET_SCAN_VERSION,
+            model_version=scan_model_version,
             warning=warning,
             risk_profiles=risk_profiles,
         )
@@ -842,6 +969,24 @@ def _load_scan(
     result = universe_result, sectors, industries, candidates, warning
     st.session_state[result_key] = result
     return result
+
+
+def _apply_geography_dimension(
+    universe_result: DataResult, config: dict[str, Any]
+) -> DataResult:
+    frame = universe_result.data.copy()
+    frame["Listing region"] = frame["Region"]
+    selected_column = geography_column(config)
+    if selected_column == "Country":
+        countries = frame["Country"].replace({"": "Unknown"}).fillna("Unknown")
+        frame["Region"] = countries
+    return DataResult(
+        frame,
+        universe_result.source,
+        universe_result.retrieved_at,
+        universe_result.is_fallback,
+        universe_result.warning,
+    )
 
 
 def _ensure_rotation_columns(industries: pd.DataFrame) -> pd.DataFrame:
@@ -965,6 +1110,25 @@ def _market_page(load_mode: str) -> None:
     equity_column.metric("Equity trend", "Supportive" if equity_check else "Defensive")
     credit_column.metric(
         "Credit appetite", "Supportive" if credit_check else "Defensive"
+    )
+    control_key = {
+        "Risk-on": "supportive",
+        "Mixed": "neutral",
+        "Risk-off": "defensive",
+    }.get(regime.label, "defensive")
+    control = analysis_config_store().load()["market_controls"][control_key]
+    st.subheader("General control plan")
+    exposure, position_risk, entry_policy = st.columns([1, 1, 2])
+    exposure.metric(
+        "Maximum gross exposure", f"{control['max_gross_exposure_pct']:.0f}%"
+    )
+    position_risk.metric(
+        "Risk per position", f"{control['risk_per_position_pct']:.2f}%"
+    )
+    entry_policy.markdown(f"**New entries**\n\n{control['new_entry_policy']}")
+    st.caption(
+        "Controls are configurable guardrails for research and position planning, "
+        "not personalized investment advice. News and sentiment are not yet inputs."
     )
     with st.expander("Market regime evidence"):
         st.dataframe(
@@ -1211,13 +1375,11 @@ def _industry_option_label(row: pd.Series) -> str:
 
 
 def _industry_proxy(row: pd.Series) -> tuple[str, str]:
+    config = analysis_config_store().load()
+    region = str(row.get("Listing region", row.get("Region", "United States")))
     industry = str(row["Industry"])
     sector = str(row["Sector"])
-    proxy = INDUSTRY_ETFS.get(industry)
-    if proxy:
-        return proxy, "representative industry ETF"
-    proxy = SECTOR_ETFS.get(sector, "SPY")
-    return proxy, "sector ETF fallback"
+    return configured_proxy(config, region, sector, industry)
 
 
 def _industry_proxy_figure(
@@ -1405,6 +1567,17 @@ def _industry_proxy_gallery(
 
 def _sector_page(load_mode: str) -> None:
     _heading("Industry rotation", "Early shifts, established trends, and stock setups")
+    config = analysis_config_store().load()
+    profile_name = st.session_state.get("active_rule_profile")
+    profile = config["rule_profiles"].get(
+        profile_name, next(iter(config["rule_profiles"].values()))
+    )
+    geography_label = (
+        "Company domicile"
+        if config["geography_dimension"] == "company_domicile"
+        else "Listing region"
+    )
+    st.caption(f"Market hierarchy · {geography_label} · Sector · Industry")
     st.caption(
         "Start with gaining short-horizon momentum or broaden the industry state "
         "to inspect European, Asian, and other listing markets. The Winning flag "
@@ -1470,7 +1643,7 @@ def _sector_page(load_mode: str) -> None:
         if selected_region in region_options
         else 0
     )
-    region = st.selectbox("Listing region", region_options, index=region_index)
+    region = st.selectbox(geography_label, region_options, index=region_index)
     regional_sectors = winning_sectors[winning_sectors["Region"] == region]
     sector_options = regional_sectors["Sector"].tolist()
     selected_sector = selected_context[1] if selected_context else None
@@ -1521,11 +1694,16 @@ def _sector_page(load_mode: str) -> None:
         else 0
     )
     industry = st.selectbox("Industry", industry_options, index=industry_index)
+    st.markdown(
+        f"**{geography_label}:** {region}  /  **Sector:** {sector}  /  "
+        f"**Industry:** {industry}"
+    )
     stocks = candidates[
         (candidates["Region"] == region)
         & (candidates["Sector"] == sector)
         & (candidates["Industry"] == industry)
     ]
+    stocks = _add_gettex_availability(stocks)
     st.subheader(f"{industry} stock candidates")
     st.caption(
         "Enable or disable each core rule, then refine the remaining candidates "
@@ -1533,6 +1711,13 @@ def _sector_page(load_mode: str) -> None:
     )
     if stocks.empty:
         st.info("No stocks with sufficient cached history are available.")
+        return
+    gettex_availability = _gettex_filter_control(
+        stocks, "industries_gettex_filter"
+    )
+    stocks = _filter_gettex_availability(stocks, gettex_availability)
+    if stocks.empty:
+        st.info("No stocks match the selected broker availability.")
         return
     risk_profiles = _cached_risk_profiles()
     if not risk_profiles.empty:
@@ -1555,14 +1740,26 @@ def _sector_page(load_mode: str) -> None:
         )
         setup_column, volatility_column, risk_column = st.columns(3)
         minimum_setup_display = setup_column.slider(
-            "Minimum setup score", 1, 10, 1, 1
+            "Minimum setup score",
+            1,
+            10,
+            int(_score_10(profile["minimum_setup_score"])),
+            1,
         )
         minimum_setup = _raw_score_threshold(minimum_setup_display)
         maximum_volatility = volatility_column.slider(
-            "Maximum annualized volatility %", 20, 200, 100, 5
+            "Maximum annualized volatility %",
+            20,
+            200,
+            int(profile["maximum_volatility_pct"]),
+            5,
         )
         minimum_safety = risk_column.slider(
-            "Minimum safety score", 1, 10, 2, 1
+            "Minimum safety score",
+            1,
+            10,
+            int(_score_10(profile["minimum_safety_score"])),
+            1,
         )
         maximum_risk = _raw_risk_limit(minimum_safety)
     stocks = _filter_technical_candidates(
@@ -1575,7 +1772,7 @@ def _sector_page(load_mode: str) -> None:
         100.0,
         100.0,
         False,
-        False,
+        bool(profile["require_above_sma150"]),
         False,
         False,
     )
@@ -1598,7 +1795,11 @@ def _sector_page(load_mode: str) -> None:
         )
         score_column, match_column = st.columns(2)
         minimum_fundamental_display = score_column.slider(
-            "Minimum fundamental score", 1, 10, 7, 1
+            "Minimum fundamental score",
+            1,
+            10,
+            int(_score_10(profile["minimum_fundamental_score"])),
+            1,
         )
         minimum_fundamental = _raw_score_threshold(minimum_fundamental_display)
         match_policy = match_column.segmented_control(
@@ -1685,6 +1886,12 @@ def _sector_page(load_mode: str) -> None:
             "SMA50 slope 20D %": st.column_config.NumberColumn(format="%+.1f%%"),
             "Volume increasing": st.column_config.CheckboxColumn(disabled=True),
             "Volume trend ratio": st.column_config.NumberColumn(format="%.2fx"),
+            "GETTEX": st.column_config.TextColumn(
+                "Broker availability",
+                help=(
+                    "Tradability confirmed by the imported broker symbol list."
+                )
+            ),
             "Price": st.column_config.NumberColumn(
                 format="%.2f", help="Latest daily close in the listing currency."
             ),
@@ -1776,6 +1983,7 @@ def _sector_page(load_mode: str) -> None:
             "Country": selected.get("Country"),
             "Exchange": selected.get("Exchange"),
             "Currency": selected.get("Currency"),
+            "GETTEX": selected.get("GETTEX"),
         }
         st.session_state["pending_stocks_workspace_view"] = "Research"
         st.session_state["pending_workspace_page"] = "Stocks"
@@ -1829,6 +2037,13 @@ def _research_page() -> None:
         ]
         if details:
             st.caption(" · ".join(details))
+    gettex_status = _add_gettex_availability(
+        pd.DataFrame({"Symbol": [symbol]})
+    ).iloc[0]["GETTEX"]
+    st.caption(
+        f"Broker availability: {gettex_status} · market data remains from the "
+        "listed exchange"
+    )
     price, quality = st.columns(2)
     price.metric(
         "Last close",
@@ -2786,6 +3001,149 @@ def _portfolio_page() -> None:
     remove = st.selectbox("Close/remove position", positions["symbol"].tolist())
     if st.button("Remove position") and remove:
         repository().delete_position(remove)
+        st.rerun()
+
+
+def _settings_page() -> None:
+    _heading(
+        "Analysis settings",
+        "Regional mappings, market controls, and rule profiles",
+    )
+    store = analysis_config_store()
+    config = store.load()
+
+    st.subheader("Geography")
+    geography_options = {
+        "Listing region": "listing_region",
+        "Company domicile": "company_domicile",
+    }
+    current_label = next(
+        label
+        for label, value in geography_options.items()
+        if value == config["geography_dimension"]
+    )
+    selected_label = st.segmented_control(
+        "Sector and industry grouping",
+        tuple(geography_options),
+        default=current_label,
+    )
+    if (
+        selected_label
+        and geography_options[selected_label] != config["geography_dimension"]
+    ):
+        config["geography_dimension"] = geography_options[selected_label]
+        store.save(config)
+        _force_market_refresh()
+        st.rerun()
+
+    st.subheader("Rule profiles")
+    profile_name = st.selectbox("Profile to edit", tuple(config["rule_profiles"]))
+    profile = config["rule_profiles"][profile_name]
+    with st.form("rule_profile_editor"):
+        setup, volatility = st.columns(2)
+        minimum_setup = setup.number_input(
+            "Minimum setup score (0-100)",
+            0,
+            100,
+            int(profile["minimum_setup_score"]),
+        )
+        maximum_volatility = volatility.number_input(
+            "Maximum annualized volatility %",
+            0,
+            100,
+            int(profile["maximum_volatility_pct"]),
+        )
+        safety, fundamental = st.columns(2)
+        minimum_safety = safety.number_input(
+            "Minimum safety score (0-100)",
+            0,
+            100,
+            int(profile["minimum_safety_score"]),
+        )
+        minimum_fundamental = fundamental.number_input(
+            "Minimum fundamental score (0-100)",
+            0,
+            100,
+            int(profile["minimum_fundamental_score"]),
+        )
+        require_sma150 = st.checkbox(
+            "Require price above SMA150",
+            value=bool(profile["require_above_sma150"]),
+        )
+        if st.form_submit_button("Save rule profile", type="primary"):
+            profile.update(
+                {
+                    "minimum_setup_score": minimum_setup,
+                    "maximum_volatility_pct": maximum_volatility,
+                    "minimum_safety_score": minimum_safety,
+                    "minimum_fundamental_score": minimum_fundamental,
+                    "require_above_sma150": require_sma150,
+                }
+            )
+            store.save(config)
+            st.success(f"Saved {profile_name} profile.")
+
+    st.subheader("Market control bands")
+    controls = pd.DataFrame.from_dict(config["market_controls"], orient="index")
+    controls.index.name = "Regime"
+    edited_controls = st.data_editor(
+        controls.reset_index(),
+        hide_index=True,
+        width="stretch",
+        disabled=["Regime"],
+        column_config={
+            "max_gross_exposure_pct": st.column_config.NumberColumn(
+                "Maximum gross exposure %", min_value=0, max_value=100
+            ),
+            "risk_per_position_pct": st.column_config.NumberColumn(
+                "Risk per position %", min_value=0.0, max_value=100.0
+            ),
+            "new_entry_policy": st.column_config.TextColumn("New-entry policy"),
+        },
+    )
+    if st.button("Save market controls"):
+        config["market_controls"] = edited_controls.set_index("Regime").to_dict(
+            orient="index"
+        )
+        store.save(config)
+        st.success("Saved market control bands.")
+
+    st.subheader("Regional ETF and index proxies")
+    region = st.selectbox("Region mapping", tuple(config["regional_proxies"]))
+    mapping = config["regional_proxies"][region]
+    with st.form("regional_proxy_editor"):
+        benchmark = st.text_input("Regional benchmark", value=mapping["benchmark"])
+        sectors_json = st.text_area(
+            "Sector mappings (JSON)",
+            value=json.dumps(mapping.get("sectors", {}), indent=2, sort_keys=True),
+            height=180,
+        )
+        industries_json = st.text_area(
+            "Industry mappings (JSON)",
+            value=json.dumps(mapping.get("industries", {}), indent=2, sort_keys=True),
+            height=220,
+        )
+        if st.form_submit_button("Save regional proxies", type="primary"):
+            try:
+                config["regional_proxies"][region] = {
+                    "benchmark": benchmark.strip().upper(),
+                    "sectors": json.loads(sectors_json),
+                    "industries": json.loads(industries_json),
+                }
+                store.save(config)
+                st.success(f"Saved {region} proxy mappings.")
+            except (json.JSONDecodeError, ValueError) as error:
+                st.error(str(error))
+
+    st.download_button(
+        "Download configuration",
+        json.dumps(config, indent=2, sort_keys=True) + "\n",
+        "stockfinder-analysis-config.json",
+        "application/json",
+    )
+    if st.button("Reset all analysis settings"):
+        store.reset()
+        _force_market_refresh()
         st.rerun()
 
 

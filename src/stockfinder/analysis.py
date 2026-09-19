@@ -621,7 +621,10 @@ def broad_rotation_scan(
         region = str(representative.get("Region", "United States"))
         industry_rows.append(
             {
-            "Region": region,
+                "Region": region,
+                "Listing region": str(
+                    representative.get("Listing region", region)
+                ),
                 "Sector": sector,
                 "Industry": industry,
                 "Members": len(member_histories),
@@ -721,6 +724,7 @@ def breakout_candidates(
                 "Symbol": symbol,
                 "Company": member["Name"],
                 "Region": region,
+                "Listing region": member.get("Listing region", region),
                 "Country": member.get("Country", "Unknown"),
                 "Exchange": member.get("Exchange", "Unknown"),
                 "Currency": member.get("Currency", "Unknown"),

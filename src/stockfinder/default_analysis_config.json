@@ -1,0 +1,108 @@
+{
+  "version": 1,
+  "geography_dimension": "listing_region",
+  "market_controls": {
+    "defensive": {
+      "max_gross_exposure_pct": 35,
+      "risk_per_position_pct": 0.5,
+      "new_entry_policy": "Only exceptional setups with confirmed liquidity"
+    },
+    "neutral": {
+      "max_gross_exposure_pct": 65,
+      "risk_per_position_pct": 0.75,
+      "new_entry_policy": "Selective entries with normal confirmation"
+    },
+    "supportive": {
+      "max_gross_exposure_pct": 90,
+      "risk_per_position_pct": 1.0,
+      "new_entry_policy": "Entries allowed when the active rule profile passes"
+    }
+  },
+  "rule_profiles": {
+    "Swing": {
+      "minimum_setup_score": 70,
+      "maximum_volatility_pct": 100,
+      "minimum_safety_score": 20,
+      "minimum_fundamental_score": 65,
+      "require_above_sma150": false
+    },
+    "Position": {
+      "minimum_setup_score": 65,
+      "maximum_volatility_pct": 70,
+      "minimum_safety_score": 40,
+      "minimum_fundamental_score": 70,
+      "require_above_sma150": true
+    },
+    "Investing": {
+      "minimum_setup_score": 55,
+      "maximum_volatility_pct": 50,
+      "minimum_safety_score": 55,
+      "minimum_fundamental_score": 75,
+      "require_above_sma150": true
+    }
+  },
+  "regional_proxies": {
+    "Global": {
+      "benchmark": "ACWI",
+      "sectors": {},
+      "industries": {}
+    },
+    "United States": {
+      "benchmark": "SPY",
+      "sectors": {
+        "Communication Services": "XLC",
+        "Consumer Discretionary": "XLY",
+        "Consumer Staples": "XLP",
+        "Energy": "XLE",
+        "Financials": "XLF",
+        "Health Care": "XLV",
+        "Industrials": "XLI",
+        "Information Technology": "XLK",
+        "Materials": "XLB",
+        "Real Estate": "XLRE",
+        "Utilities": "XLU"
+      },
+      "industries": {
+        "Aerospace & Defense": "ITA",
+        "Automobiles": "CARZ",
+        "Broadline Retail": "XRT",
+        "Diversified Banks": "KBE",
+        "Internet Content": "FDN",
+        "Managed Health Care": "IHF",
+        "Pharmaceuticals": "PPH",
+        "Semiconductors": "SMH",
+        "Systems Software": "IGV"
+      }
+    },
+    "Europe": {
+      "benchmark": "VGK",
+      "sectors": {},
+      "industries": {}
+    },
+    "Asia": {
+      "benchmark": "AAXJ",
+      "sectors": {},
+      "industries": {}
+    },
+    "Asia-Pacific": {
+      "benchmark": "VPL",
+      "sectors": {},
+      "industries": {}
+    },
+    "Canada": {
+      "benchmark": "EWC",
+      "sectors": {},
+      "industries": {}
+    },
+    "Latin America": {
+      "benchmark": "ILF",
+      "sectors": {},
+      "industries": {}
+    },
+    "Africa": {
+      "benchmark": "AFK",
+      "sectors": {},
+      "industries": {}
+    }
+  }
+}

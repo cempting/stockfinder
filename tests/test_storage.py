@@ -1,10 +1,12 @@
 from datetime import UTC, datetime
 
 import pandas as pd
+import pytest
 
 from stockfinder.runtime import application_data_dir
 from stockfinder.storage import (
     CompanyProfileCache,
+    GettexInstrumentStore,
     MarketHistoryCache,
     Repository,
     ScanSnapshot,
@@ -60,6 +62,22 @@ def test_company_profile_cache_persists_json(tmp_path) -> None:
 
     assert CompanyProfileCache(tmp_path / "profiles").load("TEST") == profile
     assert cache.is_fresh("TEST", 1)
+
+
+def test_gettex_store_imports_common_broker_symbol_columns(tmp_path) -> None:
+    store = GettexInstrumentStore(tmp_path / "gettex.csv")
+
+    imported = store.import_csv(b"Ticker;Name\naapl;Apple\nSAP.DE;SAP\naapl;Apple\n")
+
+    assert imported["Symbol"].tolist() == ["AAPL", "SAP.DE"]
+    assert GettexInstrumentStore(tmp_path / "gettex.csv").load().equals(imported)
+
+
+def test_gettex_store_rejects_csv_without_symbol_column(tmp_path) -> None:
+    store = GettexInstrumentStore(tmp_path / "gettex.csv")
+
+    with pytest.raises(ValueError, match="Symbol"):
+        store.import_csv(b"ISIN;Name\nDE0007164600;SAP\n")
 
 
 def test_position_round_trip_and_delete(tmp_path) -> None:

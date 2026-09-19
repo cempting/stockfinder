@@ -34,6 +34,20 @@ flowchart LR
 6. Inspect a detailed security analysis.
 7. Add promising candidates to a watchlist or portfolio.
 
+The primary navigation path is intentionally hierarchical:
+
+```mermaid
+flowchart LR
+   A[Market risk and controls] --> B[Geography]
+   B --> C[Sector]
+   C --> D[Industry]
+   D --> E[Ranked tradable stocks]
+   E --> F[Security research]
+```
+
+The interface preserves geography, sector, and industry as a breadcrumb so the
+user can move both deeper into the hierarchy and back to a broader comparison.
+
 ## Target User
 
 The initial application is intended for a single private investor and trader.
@@ -133,6 +147,8 @@ profile must be deferred or clearly identified as an end-of-day setup scanner.
 - Broad benchmarks: S&P 500/SPY, Nasdaq 100/QQQ, and Russell 2000/IWM
 - Security comparisons: relevant sector ETFs and industry peers
 - Refresh frequency: daily after market close
+- Tradability: independently verified using an imported broker symbol list;
+   analytical inclusion does not imply broker availability
 
 Official Russell 3000 constituents and GICS classifications may carry licensing
 restrictions. The implementation may need an open approximation, a licensed
@@ -151,12 +167,21 @@ The market dashboard should summarize:
 - The US dollar, metals, oil, and other relevant commodities
 - Market sentiment indicators
 - Economic releases, central-bank events, earnings, and important news
+- A regime-dependent control plan for maximum gross exposure, risk per position,
+  and restrictions on new entries
+
+The control model must remain extensible. News and social sentiment can be added
+as separately sourced evidence after their reliability, timeliness, and scoring
+impact have been validated; they are not silently included in the current score.
 
 ### Sector and Industry Screener
 
 The screener should provide tables, heatmaps, and other suitable visualizations
 for understanding sector rotation and possible capital flows. Users should be
 able to navigate from the market overview into sectors and industries.
+Analysis can be grouped by listing region or company domicile. Representative
+benchmarks and ETF/index proxies are configured per region, sector, and industry,
+with explicit regional and global fallbacks.
 
 ### Industry Drill-Down
 
@@ -201,6 +226,11 @@ The first portfolio implementation should support:
 The application should explain its calculations, sources, score components,
 weights, thresholds, assumptions, and known data limitations. Users should be
 able to select risk and horizon presets and adjust supported parameters.
+
+Settings are persisted in a versioned configuration file and editable in the
+application. The first configurable surface includes geography mode, regional
+proxy mappings, market control bands, and separate swing, position, and investing
+rule profiles.
 
 ## Data and Reliability
 

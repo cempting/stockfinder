@@ -6,6 +6,7 @@ import sqlite3
 from contextlib import closing
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from io import BytesIO
 from pathlib import Path
 from tempfile import mkdtemp
 from uuid import uuid4
@@ -118,6 +119,60 @@ class CompanyProfileCache:
             return False
         age_seconds = datetime.now(UTC).timestamp() - path.stat().st_mtime
         return age_seconds <= max_age_hours * 60 * 60
+
+
+class GettexInstrumentStore:
+    """Persist broker-confirmed GETTEX instruments for tradability checks."""
+
+    SYMBOL_COLUMNS = {"symbol", "ticker", "yahoo symbol", "yahoo_symbol"}
+
+    def __init__(self, path: str | Path | None = None) -> None:
+        self.path = (
+            Path(path)
+            if path is not None
+            else application_data_dir() / "gettex_instruments.csv"
+        )
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+
+    def load(self) -> pd.DataFrame:
+        if not self.path.exists():
+            return pd.DataFrame(columns=["Symbol"])
+        try:
+            frame = pd.read_csv(self.path, dtype=str).fillna("")
+            return frame if "Symbol" in frame else pd.DataFrame(columns=["Symbol"])
+        except (OSError, pd.errors.ParserError):
+            return pd.DataFrame(columns=["Symbol"])
+
+    def import_csv(self, content: bytes) -> pd.DataFrame:
+        frame = pd.read_csv(
+            BytesIO(content), sep=None, engine="python", dtype=str
+        ).fillna("")
+        columns = {str(column).strip().lower(): column for column in frame.columns}
+        symbol_column = next(
+            (columns[name] for name in self.SYMBOL_COLUMNS if name in columns), None
+        )
+        if symbol_column is None:
+            raise ValueError(
+                "CSV needs a Symbol, Ticker, Yahoo Symbol, or yahoo_symbol column"
+            )
+        normalized = pd.DataFrame(
+            {"Symbol": frame[symbol_column].str.strip().str.upper()}
+        )
+        normalized = normalized[normalized["Symbol"] != ""].drop_duplicates("Symbol")
+        if normalized.empty:
+            raise ValueError("CSV contains no usable symbols")
+        temporary = self.path.with_name(f".{self.path.name}.{uuid4().hex}.tmp")
+        try:
+            normalized.to_csv(temporary, index=False)
+            temporary.replace(self.path)
+        finally:
+            if temporary.exists():
+                temporary.unlink()
+        return normalized.reset_index(drop=True)
+
+    def clear(self) -> None:
+        if self.path.exists():
+            self.path.unlink()
 
 
 @dataclass(frozen=True)

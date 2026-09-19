@@ -51,6 +51,27 @@ retried with smaller batches; unresolved symbols use last-known real data when
 available. Synthetic data is reserved for symbols with no cached or provider
 data.
 
+## Broker Tradability
+
+Broker availability is separate from the exchange used for market data. Import a
+broker-confirmed CSV under **Data controls → Broker trading list**. The file must
+contain one of these columns:
+
+- `Symbol`
+- `Ticker`
+- `Yahoo Symbol`
+- `yahoo_symbol`
+
+Values must match Stockfinder's Yahoo-compatible symbols, for example `SAP.DE`.
+After import, matching candidates are marked **Available**, and unmatched
+candidates are marked **Not available**. Before a list is imported, every stock is
+marked **Not verified**. Stocks and Industry Rotation provide an independent
+broker-availability filter while retaining global market and industry analysis.
+
+ISIN-only broker exports cannot currently be matched because the public universe
+does not provide reliable ISIN identifiers. Add a Yahoo-compatible symbol column
+before importing such a file.
+
 ## Container Deployment
 
 Build and run locally:
@@ -105,7 +126,22 @@ from **Manage app** to clear the previous Python process.
 - Interactive candlestick, moving-average, and volume charts
 - Candidate stops and risk-based position sizing
 - Persistent local watchlist and portfolio using SQLite
+- Editable geography, regional proxy, rule-profile, and market-control settings
 - CSV watchlist export and transparent source/completeness indicators
+
+## Analysis Configuration
+
+Packaged defaults live in `src/stockfinder/default_analysis_config.json`. Changes
+made in the **Settings** workspace are saved to `data/analysis_config.json`, or
+under `STOCKFINDER_DATA_DIR` when configured. Settings include:
+
+- Listing-region or company-domicile sector and industry grouping
+- Region-specific benchmark, sector, and industry ETF/index mappings
+- Swing, position, and investing filter profiles
+- Defensive, neutral, and supportive exposure and position-risk controls
+
+Changing geography invalidates the processed scan so sectors, industries, and
+stocks are rebuilt under the selected hierarchy.
 
 The broad scan uses classified NASDAQ and NYSE rows from Nasdaq's public stock
 screener, a curated set of Yahoo-compatible international local-listing symbols,

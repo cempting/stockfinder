@@ -8,10 +8,13 @@ from stockfinder.app import main
 from stockfinder.models import Score, SwingSetup
 from stockfinder.ui import (
     PROMISING_CRITERIA,
+    _add_gettex_availability,
+    _apply_geography_dimension,
     _consume_pending_navigation,
     _enrich_with_cached_risk,
     _ensure_rotation_columns,
     _filter_fundamental_candidates,
+    _filter_gettex_availability,
     _filter_market_stocks,
     _filter_promising_stocks,
     _filter_technical_candidates,
@@ -56,6 +59,31 @@ def test_pending_navigation_is_centralized_and_validated() -> None:
         "workspace_page": "Stocks",
         "stocks_workspace_view": "Research",
     }
+
+
+def test_company_domicile_can_drive_market_hierarchy() -> None:
+    from datetime import UTC, datetime
+
+    from stockfinder.data import DataResult
+
+    universe = DataResult(
+        pd.DataFrame(
+            {
+                "Symbol": ["SAP.DE"],
+                "Region": ["Europe"],
+                "Country": ["Germany"],
+            }
+        ),
+        "test",
+        datetime.now(UTC),
+    )
+
+    result = _apply_geography_dimension(
+        universe, {"geography_dimension": "company_domicile"}
+    )
+
+    assert result.data.loc[0, "Region"] == "Germany"
+    assert result.data.loc[0, "Listing region"] == "Europe"
 
 
 def test_invalid_pending_navigation_is_discarded() -> None:
@@ -463,14 +491,56 @@ def test_stock_discovery_frame_joins_market_and_cached_risk_evidence() -> None:
     assert result["Market risk"] == 35.0
 
 
+def test_gettex_availability_marks_imported_and_unavailable_symbols(
+    monkeypatch,
+) -> None:
+    class Store:
+        def load(self):
+            return pd.DataFrame({"Symbol": ["SAP.DE"]})
+
+    monkeypatch.setattr("stockfinder.ui.gettex_instrument_store", lambda: Store())
+    stocks = pd.DataFrame({"Symbol": ["SAP.DE", "AAPL"]})
+
+    enriched = _add_gettex_availability(stocks)
+    available = _filter_gettex_availability(enriched, "Available")
+
+    assert enriched["GETTEX"].tolist() == ["Available", "Not available"]
+    assert available["Symbol"].tolist() == ["SAP.DE"]
+
+
+def test_gettex_availability_is_unverified_without_import(monkeypatch) -> None:
+    class Store:
+        def load(self):
+            return pd.DataFrame(columns=["Symbol"])
+
+    monkeypatch.setattr("stockfinder.ui.gettex_instrument_store", lambda: Store())
+
+    enriched = _add_gettex_availability(pd.DataFrame({"Symbol": ["AAPL"]}))
+
+    assert enriched.iloc[0]["GETTEX"] == "Not verified"
+
+
 def test_industry_proxy_prefers_industry_etf_then_sector_fallback() -> None:
     exact = pd.Series(
         {"Industry": "Semiconductors", "Sector": "Information Technology"}
     )
     fallback = pd.Series({"Industry": "Unknown energy", "Sector": "Energy"})
 
-    assert _industry_proxy(exact) == ("SMH", "representative industry ETF")
-    assert _industry_proxy(fallback) == ("XLE", "sector ETF fallback")
+    assert _industry_proxy(exact) == ("SMH", "regional industry proxy")
+    assert _industry_proxy(fallback) == ("XLE", "regional sector proxy")
+
+
+def test_industry_proxy_uses_listing_region_for_domicile_group() -> None:
+    row = pd.Series(
+        {
+            "Region": "Germany",
+            "Listing region": "Europe",
+            "Sector": "Industrials",
+            "Industry": "Machinery",
+        }
+    )
+
+    assert _industry_proxy(row) == ("VGK", "regional benchmark fallback")
 
 
 def test_industry_proxy_thumbnail_is_compact_and_selectable() -> None:
