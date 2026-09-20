@@ -9,7 +9,7 @@ def run() -> None:
     if str(source_root) not in sys.path:
         sys.path.insert(0, str(source_root))
 
-    from stockfinder.ui import main
+    from stockfinder.presentation.ui import main
 
     main()
 

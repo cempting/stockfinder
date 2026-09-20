@@ -2,15 +2,15 @@
 
 import streamlit as st
 
-from stockfinder.config import (
+from stockfinder.infrastructure.config import (
     PROFILE_COMPOSITION_PRESETS,
     apply_profile_composition_preset,
     configured_rule_profile,
     update_rule_profile,
 )
-from stockfinder.dashboard import WidgetSpec
-from stockfinder.dashboard_runtime import DashboardServices
-from stockfinder.navigation import AnalysisContext
+from stockfinder.presentation.dashboard import WidgetSpec
+from stockfinder.presentation.dashboard_runtime import DashboardServices
+from stockfinder.presentation.navigation import AnalysisContext
 
 
 def render_rule_profile_editor(

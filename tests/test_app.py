@@ -15,11 +15,14 @@ from stockfinder.ui import (
     _consume_pending_navigation,
     _filter_fundamental_candidates,
     _filter_gettex_availability,
+    _filter_industry_browser,
+    _filter_industry_stocks,
     _filter_market_stocks,
     _filter_promising_stocks,
     _filter_technical_candidates,
     _fundamental_evidence_frame,
     _fundamental_signal,
+    _industry_browser_frame,
     _industry_proxy,
     _industry_proxy_thumbnail,
     _metal_summary,
@@ -33,6 +36,7 @@ from stockfinder.ui import (
     _selected_rotation_context,
     _setup_evidence_frame,
     _stock_discovery_frame,
+    _stocks_for_industries,
     _volatility_context,
     _volume_signal,
 )
@@ -44,7 +48,7 @@ def test_main_launches_streamlit_with_active_interpreter() -> None:
 
     command = call.call_args.args[0]
     assert command[1:4] == ["-m", "streamlit", "run"]
-    assert command[-1].endswith("stockfinder/ui.py")
+    assert command[-1].endswith("stockfinder/presentation/ui.py")
 
 
 def test_pending_navigation_is_centralized_and_validated() -> None:
@@ -290,6 +294,88 @@ def test_adjustable_technical_candidate_filters() -> None:
     )
 
     assert filtered["Symbol"].tolist() == ["PASS"]
+
+
+def test_industry_browser_shows_all_proxies_and_stocks_without_filters() -> None:
+    industries = pd.DataFrame(
+        {
+            "Region": ["United States", "Europe"],
+            "Sector": ["Technology", "Industrials"],
+            "Industry": ["Semiconductors", "Machinery"],
+            "Rotation state": ["Gaining", "Mixed"],
+        }
+    )
+    candidates = pd.DataFrame(
+        {
+            "Symbol": ["CHIP", "GEAR"],
+            "Region": ["United States", "Europe"],
+            "Sector": ["Technology", "Industrials"],
+            "Industry": ["Semiconductors", "Machinery"],
+        }
+    )
+    config = {
+        "regional_proxies": {
+            "United States": {
+                "benchmark": "SPY",
+                "sectors": {"Technology": "XLK"},
+                "industries": {"Semiconductors": "SMH"},
+            },
+            "Europe": {
+                "benchmark": "VGK",
+                "sectors": {"Industrials": "EXI"},
+                "industries": {},
+            },
+        }
+    }
+
+    browser = _industry_browser_frame(industries, candidates, config)
+    visible = _filter_industry_browser(browser)
+    stocks = _stocks_for_industries(candidates, visible)
+
+    assert visible["ETF / proxy"].tolist() == ["SMH", "EXI"]
+    assert visible["Stocks"].tolist() == [1, 1]
+    assert stocks["Symbol"].tolist() == ["CHIP", "GEAR"]
+
+
+def test_industry_browser_filters_etfs_and_stocks_from_the_same_context() -> None:
+    browser = pd.DataFrame(
+        {
+            "Region": ["United States", "Europe"],
+            "Sector": ["Technology", "Industrials"],
+            "Industry": ["Semiconductors", "Machinery"],
+            "ETF / proxy": ["SMH", "EXI"],
+            "Rotation state": ["Gaining", "Mixed"],
+        }
+    )
+    candidates = pd.DataFrame(
+        {
+            "Symbol": ["CHIP", "GEAR"],
+            "Region": ["United States", "Europe"],
+            "Sector": ["Technology", "Industrials"],
+            "Industry": ["Semiconductors", "Machinery"],
+        }
+    )
+
+    visible = _filter_industry_browser(browser, search="SMH")
+    stocks = _stocks_for_industries(candidates, visible)
+
+    assert visible["Industry"].tolist() == ["Semiconductors"]
+    assert stocks["Symbol"].tolist() == ["CHIP"]
+
+
+def test_industry_stock_filters_are_optional_and_explicit() -> None:
+    stocks = pd.DataFrame(
+        {
+            "Symbol": ["CHIP", "GEAR"],
+            "Company": ["Chip Works", "Gear Works"],
+            "Setup state": ["Ready", "Developing"],
+        }
+    )
+
+    assert _filter_industry_stocks(stocks)["Symbol"].tolist() == ["CHIP", "GEAR"]
+    assert _filter_industry_stocks(
+        stocks, search="chip", setup_states=("Ready",)
+    )["Symbol"].tolist() == ["CHIP"]
 
 
 def test_core_rule_filters_can_be_disabled_independently() -> None:

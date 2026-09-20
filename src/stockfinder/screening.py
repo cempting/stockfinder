@@ -5,7 +5,7 @@ from typing import Any
 
 import pandas as pd
 
-from stockfinder.config import configured_rule_profile
+from stockfinder.infrastructure.config import configured_rule_profile
 
 
 def screen_ranked_stocks(

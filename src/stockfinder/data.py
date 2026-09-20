@@ -14,7 +14,7 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 
-from stockfinder.storage import CompanyProfileCache, MarketHistoryCache
+from stockfinder.infrastructure.storage import CompanyProfileCache, MarketHistoryCache
 
 STOCK_SCREENER_URL = (
     "https://api.nasdaq.com/api/screener/stocks"

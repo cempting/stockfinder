@@ -11,7 +11,7 @@ from tempfile import TemporaryDirectory, mkdtemp
 from uuid import uuid4
 from zipfile import ZIP_DEFLATED, BadZipFile, ZipFile
 
-from stockfinder.runtime import application_data_dir
+from stockfinder.infrastructure.runtime import application_data_dir
 
 MANIFEST_NAME = "manifest.json"
 BACKUP_VERSION = 1

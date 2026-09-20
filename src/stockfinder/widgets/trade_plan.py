@@ -11,9 +11,9 @@ from stockfinder.analysis import (
     calculate_position_plan,
     calculate_reward_risk,
 )
-from stockfinder.dashboard import WidgetSpec
-from stockfinder.dashboard_runtime import DashboardServices
-from stockfinder.navigation import AnalysisContext
+from stockfinder.presentation.dashboard import WidgetSpec
+from stockfinder.presentation.dashboard_runtime import DashboardServices
+from stockfinder.presentation.navigation import AnalysisContext
 
 RISK_PRESETS = {
     "Conservative": {"atr_multiplier": 1.5, "trailing_pct": 6.0, "risk_pct": 0.25},

@@ -8,15 +8,15 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from stockfinder.analysis import classify_market_regime
-from stockfinder.dashboard import WidgetSpec
-from stockfinder.dashboard_runtime import DashboardServices
-from stockfinder.navigation import AnalysisContext
 from stockfinder.portfolio import (
     PortfolioExposure,
     fx_conversion_symbols,
     latest_conversion_rate,
     portfolio_exposure_snapshot,
 )
+from stockfinder.presentation.dashboard import WidgetSpec
+from stockfinder.presentation.dashboard_runtime import DashboardServices
+from stockfinder.presentation.navigation import AnalysisContext
 
 REGIME_SYMBOLS = ("SPY", "IWM", "HYG", "IEF", "UUP", "^VIX")
 CURRENCIES = ("EUR", "USD", "GBP", "CHF", "JPY", "CAD", "AUD", "HKD", "KRW")

@@ -2,7 +2,7 @@
 
 import streamlit as st
 
-from stockfinder.navigation import AnalysisContext
+from stockfinder.presentation.navigation import AnalysisContext
 
 
 def linked_selectbox(

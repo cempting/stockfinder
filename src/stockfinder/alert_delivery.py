@@ -15,18 +15,21 @@ from uuid import uuid4
 
 import pandas as pd
 
-from stockfinder.config import AnalysisConfigStore, configured_alert_rules
+from stockfinder.infrastructure.config import (
+    AnalysisConfigStore,
+    configured_alert_rules,
+)
+from stockfinder.infrastructure.runtime import application_data_dir
+from stockfinder.infrastructure.storage import (
+    MarketHistoryCache,
+    Repository,
+    ScanSnapshotStore,
+)
 from stockfinder.portfolio import (
     fx_conversion_symbols,
     latest_conversion_rate,
     portfolio_alerts,
     portfolio_exposure_snapshot,
-)
-from stockfinder.runtime import application_data_dir
-from stockfinder.storage import (
-    MarketHistoryCache,
-    Repository,
-    ScanSnapshotStore,
 )
 
 

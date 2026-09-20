@@ -4,13 +4,13 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from stockfinder.dashboard import WidgetSpec
-from stockfinder.dashboard_runtime import DashboardServices
 from stockfinder.market_overview import (
     regional_confirmation_snapshot,
     regional_market_snapshot,
 )
-from stockfinder.navigation import AnalysisContext
+from stockfinder.presentation.dashboard import WidgetSpec
+from stockfinder.presentation.dashboard_runtime import DashboardServices
+from stockfinder.presentation.navigation import AnalysisContext
 from stockfinder.widgets.context_controls import linked_selectbox
 
 

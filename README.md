@@ -5,6 +5,8 @@ fundamental and risk evaluation, and technical confirmation.
 
 The product vision and requirements gathered during discovery are documented
 in [docs/product-vision.md](docs/product-vision.md).
+Package ownership and dependency rules are documented in
+[docs/architecture.md](docs/architecture.md).
 Optional licensed-provider adapters are documented in
 [docs/provider-integration.md](docs/provider-integration.md).
 The latest local and Streamlit Cloud acceptance findings are recorded in
@@ -33,7 +35,7 @@ stockfinder
 Or run Streamlit directly:
 
 ```bash
-streamlit run src/stockfinder/ui.py
+streamlit run src/stockfinder/presentation/ui.py
 ```
 
 The application opens at <http://localhost:8501> by default.
@@ -42,9 +44,10 @@ The application opens at <http://localhost:8501> by default.
 
 The default **Command Center** is composed from registered widgets rather than a
 fixed page. Packaged dashboard definitions live in
-`src/stockfinder/default_dashboards.json`. Create `data/dashboards.json` (or the
-same file under `STOCKFINDER_DATA_DIR`) to add, remove, reorder, resize, or create
-named dashboards without editing the application shell.
+`src/stockfinder/presentation/default_dashboards.json`. Create
+`data/dashboards.json` (or the same file under `STOCKFINDER_DATA_DIR`) to add,
+remove, reorder, resize, or create named dashboards without editing the
+application shell.
 
 The modular widgets now cover market regime and controls, cross-asset conditions,
 regional benchmark comparison, linked sector/industry rotation, multi-horizon
@@ -164,9 +167,10 @@ from **Manage app** to clear the previous Python process.
 
 ## Analysis Configuration
 
-Packaged defaults live in `src/stockfinder/default_analysis_config.json`. Changes
-made in the **Settings** workspace are saved to `data/analysis_config.json`, or
-under `STOCKFINDER_DATA_DIR` when configured. Settings include:
+Packaged defaults live in
+`src/stockfinder/infrastructure/default_analysis_config.json`. Changes made in
+the **Settings** workspace are saved to `data/analysis_config.json`, or under
+`STOCKFINDER_DATA_DIR` when configured. Settings include:
 
 - Listing-region or company-domicile sector and industry grouping
 - Region-specific benchmark, sector, and industry ETF/index mappings

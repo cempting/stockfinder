@@ -1,6 +1,6 @@
 """Built-in dashboard widgets."""
 
-from stockfinder.widget_registry import WidgetRegistry
+from stockfinder.presentation.widget_registry import WidgetRegistry
 from stockfinder.widgets.alert_center import render_alert_center
 from stockfinder.widgets.cross_asset_conditions import render_cross_asset_conditions
 from stockfinder.widgets.instrument_analysis import render_instrument_analysis

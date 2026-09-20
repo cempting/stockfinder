@@ -3,13 +3,13 @@
 import streamlit as st
 
 from stockfinder.analysis import classify_market_regime
-from stockfinder.dashboard import WidgetSpec
-from stockfinder.dashboard_runtime import DashboardServices
 from stockfinder.market_overview import (
     downside_control_response,
     downside_risk_snapshot,
 )
-from stockfinder.navigation import AnalysisContext
+from stockfinder.presentation.dashboard import WidgetSpec
+from stockfinder.presentation.dashboard_runtime import DashboardServices
+from stockfinder.presentation.navigation import AnalysisContext
 
 
 def render_market_regime(

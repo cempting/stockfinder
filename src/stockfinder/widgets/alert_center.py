@@ -3,11 +3,11 @@
 import pandas as pd
 import streamlit as st
 
-from stockfinder.config import configured_alert_rules, update_alert_rules
-from stockfinder.dashboard import WidgetSpec
-from stockfinder.dashboard_runtime import DashboardServices
-from stockfinder.navigation import AnalysisContext
+from stockfinder.infrastructure.config import configured_alert_rules, update_alert_rules
 from stockfinder.portfolio import portfolio_alerts, portfolio_exposure_snapshot
+from stockfinder.presentation.dashboard import WidgetSpec
+from stockfinder.presentation.dashboard_runtime import DashboardServices
+from stockfinder.presentation.navigation import AnalysisContext
 
 
 def render_alert_center(

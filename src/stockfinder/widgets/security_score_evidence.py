@@ -4,10 +4,10 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from stockfinder.dashboard import WidgetSpec
-from stockfinder.dashboard_runtime import DashboardServices
 from stockfinder.models import Score
-from stockfinder.navigation import AnalysisContext
+from stockfinder.presentation.dashboard import WidgetSpec
+from stockfinder.presentation.dashboard_runtime import DashboardServices
+from stockfinder.presentation.navigation import AnalysisContext
 
 DIMENSIONS = ("fundamental", "risk", "technical")
 
