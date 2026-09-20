@@ -1,11 +1,18 @@
 import hashlib
 import json
+import os
 import sqlite3
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
 
-from stockfinder.backup import create_backup, main, restore_backup, verify_backup
+from stockfinder.backup import (
+    create_backup,
+    main,
+    prune_backups,
+    restore_backup,
+    verify_backup,
+)
 
 
 def test_backup_round_trip_verifies_checksums_and_restores(tmp_path) -> None:
@@ -85,3 +92,26 @@ def test_backup_cli_create_verify_and_restore(monkeypatch, tmp_path, capsys) -> 
     assert "Backup verified: 1 files" in output
     assert "Backup restored" in output
     assert (restored / "analysis_config.json").read_text(encoding="utf-8") == "{}"
+
+
+def test_prune_backups_keeps_newest_and_unrelated_files(tmp_path) -> None:
+    archives = []
+    for index in range(4):
+        path = tmp_path / f"stockfinder-2026-09-{index + 1:02d}.zip"
+        path.write_bytes(b"backup")
+        os.utime(path, (index, index))
+        archives.append(path)
+    unrelated = tmp_path / "other.zip"
+    unrelated.write_bytes(b"keep")
+
+    preview = prune_backups(tmp_path, keep=2, dry_run=True)
+    removed = prune_backups(tmp_path, keep=2)
+
+    assert preview == removed == tuple(archives[:2])
+    assert [path.exists() for path in archives] == [False, False, True, True]
+    assert unrelated.exists()
+
+
+def test_prune_backups_rejects_zero_retention(tmp_path) -> None:
+    with pytest.raises(ValueError, match="at least one"):
+        prune_backups(tmp_path, keep=0)

@@ -32,6 +32,7 @@ stockfinder = "stockfinder.app:main"
 stockfinder-alerts = "stockfinder.alert_delivery:main"
 stockfinder-backup = "stockfinder.backup:main"
 stockfinder-health = "stockfinder.health:main"
+stockfinder-refresh = "stockfinder.scan:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/stockfinder"]

@@ -122,6 +122,32 @@ def restore_backup(archive_path: str | Path, target: str | Path) -> Path:
     return target_path
 
 
+def prune_backups(
+    directory: str | Path,
+    keep: int,
+    *,
+    dry_run: bool = False,
+) -> tuple[Path, ...]:
+    """Remove older managed archives while leaving unrelated files untouched."""
+    if keep < 1:
+        raise ValueError("Backup retention must keep at least one archive")
+    directory_path = Path(directory)
+    if not directory_path.is_dir():
+        raise ValueError(f"Backup directory does not exist: {directory_path}")
+    archives = sorted(
+        directory_path.glob("stockfinder-*.zip"),
+        key=lambda path: (path.stat().st_mtime, path.name),
+        reverse=True,
+    )
+    removed = tuple(
+        sorted(archives[keep:], key=lambda path: (path.stat().st_mtime, path.name))
+    )
+    if not dry_run:
+        for path in removed:
+            path.unlink()
+    return removed
+
+
 def _validate_relative_path(relative: str) -> None:
     path = PurePosixPath(relative)
     if path.is_absolute() or not path.parts or ".." in path.parts:
@@ -154,6 +180,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     restore_parser.add_argument("archive", type=Path)
     restore_parser.add_argument("target", type=Path)
+    prune_parser = subparsers.add_parser(
+        "prune", help="Remove old managed backup archives"
+    )
+    prune_parser.add_argument("directory", type=Path)
+    prune_parser.add_argument("--keep", type=int, default=14)
+    prune_parser.add_argument("--dry-run", action="store_true")
     arguments = parser.parse_args(argv)
     try:
         if arguments.command == "create":
@@ -162,9 +194,19 @@ def main(argv: list[str] | None = None) -> int:
         elif arguments.command == "verify":
             manifest = verify_backup(arguments.archive)
             print(f"Backup verified: {len(manifest['files'])} files")
-        else:
+        elif arguments.command == "restore":
             path = restore_backup(arguments.archive, arguments.target)
             print(f"Backup restored: {path}")
+        else:
+            removed = prune_backups(
+                arguments.directory,
+                arguments.keep,
+                dry_run=arguments.dry_run,
+            )
+            action = "Would remove" if arguments.dry_run else "Removed"
+            print(f"{action} {len(removed)} backup(s)")
+            for path in removed:
+                print(path)
     except ValueError as error:
         print(f"Backup operation failed: {error}")
         return 2

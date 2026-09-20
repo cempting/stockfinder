@@ -247,6 +247,17 @@ Inspect the restored directory before switching `STOCKFINDER_DATA_DIR` to it.
 Restore intentionally refuses to overwrite a populated directory. This preserves
 the current data set until the restored copy has been verified independently.
 
+Preview and apply local retention without touching unrelated archives:
+
+```bash
+stockfinder-backup prune ~/Backups --keep 14 --dry-run
+stockfinder-backup prune ~/Backups --keep 14
+```
+
+Pruning only considers files matching `stockfinder-*.zip`, keeps at least one,
+and removes expired archives oldest-first. Off-machine replication and retention
+policies for the remote storage provider remain deployment responsibilities.
+
 ## Operational Health
 
 `stockfinder-health` checks persisted analytical state without fetching providers
@@ -267,6 +278,37 @@ allows for weekends; scans older than half that threshold warn.
 Use the existing `/_stcore/health` endpoint for process liveness and this command
 for analytical-data health. Monitoring systems can schedule the JSON form and
 alert on its exit code independently from the web server.
+
+## Scheduled Market Refresh
+
+`stockfinder-refresh` runs the same broad-market pipeline as the Command Center
+without starting Streamlit. It loads membership and daily histories, computes
+sector and industry rotation, builds stock candidates and risk profiles, and then
+atomically replaces the completed snapshot:
+
+```bash
+stockfinder-refresh --mode standard --minimum-coverage-pct 90
+stockfinder-refresh --mode extended --minimum-coverage-pct 90
+```
+
+Standard mode requests one year in 200-symbol batches; extended mode requests two
+years in 100-symbol batches. Exit code `0` means the completed snapshot meets the
+coverage threshold, `1` means it was saved but coverage is below the threshold,
+`2` means refresh failed before replacement, and `3` means another scheduled
+refresh already holds `data/.market-refresh.lock`. The previous snapshot remains
+available when computation fails.
+
+Schedule refresh after the relevant markets close. The command's nonblocking
+process lock prevents overlapping command runs; the deployment scheduler should
+treat exit code `3` as an already-running job. A typical daily sequence is:
+
+1. Run `stockfinder-refresh`.
+2. Run `stockfinder-health` and record its JSON output.
+3. Run `stockfinder-alerts` if health is acceptable for the deployment policy.
+4. Run `stockfinder-backup create` to an off-machine or synchronized location.
+
+Provider rate limits and the breadth of the configured universe determine refresh
+duration. Use `--help` to inspect command options without contacting providers.
 
 ## Long Swing Rule
 

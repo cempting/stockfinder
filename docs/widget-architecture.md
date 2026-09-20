@@ -223,10 +223,16 @@ ZIP archives with per-file SHA-256 checksums, captures SQLite through its online
 backup API, and restores only to a new or empty directory. Neither command runs as
 a hidden process inside Streamlit; scheduling, secret injection, retention, and
 restored-data activation remain explicit deployment responsibilities.
+Backup retention can be previewed and applied with `stockfinder-backup prune`; it
+only manages `stockfinder-*.zip` files and leaves unrelated archives untouched.
 `stockfinder-health` complements Streamlit's HTTP liveness endpoint with read-only
 configuration, SQLite, scan-freshness, coverage, table, risk-profile, model, and
 provider-warning checks. Its `0`, `1`, and `2` exit codes represent healthy,
 warning, and failed states for external monitoring.
+`stockfinder-refresh` runs the same extracted scan service used by Streamlit and
+atomically persists a complete standard or extended snapshot. External schedulers
+own timing, while a nonblocking process lock rejects overlapping command runs. A
+failed computation does not replace the last complete snapshot.
 
 The current international universe remains representative rather than exhaustive.
 Completing step 3 requires a reliable constituent/classification provider or a

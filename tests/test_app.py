@@ -6,14 +6,13 @@ import pandas as pd
 
 from stockfinder.app import main
 from stockfinder.models import Score, SwingSetup
+from stockfinder.scan import apply_geography_dimension, ensure_rotation_columns
 from stockfinder.ui import (
     PROMISING_CRITERIA,
     STOCKS_VIEWS,
     WORKSPACE_PAGES,
     _add_gettex_availability,
-    _apply_geography_dimension,
     _consume_pending_navigation,
-    _ensure_rotation_columns,
     _filter_fundamental_candidates,
     _filter_gettex_availability,
     _filter_market_stocks,
@@ -79,7 +78,7 @@ def test_company_domicile_can_drive_market_hierarchy() -> None:
         datetime.now(UTC),
     )
 
-    result = _apply_geography_dimension(
+    result = apply_geography_dimension(
         universe, {"geography_dimension": "company_domicile"}
     )
 
@@ -248,7 +247,7 @@ def test_rotation_columns_are_added_for_hot_loaded_scan_schema() -> None:
         }
     )
 
-    enriched = _ensure_rotation_columns(industries)
+    enriched = ensure_rotation_columns(industries)
 
     assert enriched["Rotation state"].tolist() == ["Gaining", "Losing"]
     assert enriched["Early rotation signal"].tolist() == [

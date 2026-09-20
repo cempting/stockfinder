@@ -16,19 +16,12 @@ from stockfinder.analysis import (
     analyze_long_swing_setup,
     analyze_metals,
     analyze_security,
-    breakout_candidates,
-    broad_rotation_scan,
-    build_market_risk_profiles,
     calculate_position_plan,
     calculate_reward_risk,
     classify_market_regime,
     normalized_performance,
 )
-from stockfinder.config import (
-    AnalysisConfigStore,
-    configured_proxy,
-    geography_column,
-)
+from stockfinder.config import AnalysisConfigStore, configured_proxy
 from stockfinder.dashboard import load_application_dashboards
 from stockfinder.dashboard_renderer import render_dashboard
 from stockfinder.dashboard_runtime import DashboardServices
@@ -49,16 +42,19 @@ from stockfinder.data import (
 from stockfinder.models import Score, SwingSetup
 from stockfinder.navigation import AnalysisContext
 from stockfinder.runtime import application_data_dir
+from stockfinder.scan import (
+    ensure_rotation_columns,
+    market_scan_model_version,
+    refresh_market_scan,
+)
 from stockfinder.scoring import score_fundamentals
 from stockfinder.storage import (
     GettexInstrumentStore,
     Repository,
-    ScanSnapshot,
     ScanSnapshotStore,
 )
 from stockfinder.widgets import built_in_widget_registry
 
-MARKET_SCAN_VERSION = "2026-09-promising-evidence-v12"
 WORKSPACE_PAGES = (
     "Command center",
     "Market pulse",
@@ -889,8 +885,7 @@ def _load_scan(
     load_mode: str,
 ) -> tuple[DataResult, pd.DataFrame, pd.DataFrame, pd.DataFrame, str | None]:
     config = analysis_config_store().load()
-    geography = config["geography_dimension"]
-    scan_model_version = f"{MARKET_SCAN_VERSION}-{geography}"
+    scan_model_version = market_scan_model_version(config)
     refresh_token = st.session_state.get("market_refresh_token", 0)
     result_key = (
         f"broad_scan_result_{date.today().isoformat()}_{load_mode}_"
@@ -913,7 +908,7 @@ def _load_scan(
                 snapshot.completed_at,
                 warning=snapshot.warning,
             )
-            industries = _ensure_rotation_columns(snapshot.industries)
+            industries = ensure_rotation_columns(snapshot.industries)
             result = (
                 universe_result,
                 snapshot.sectors,
@@ -931,157 +926,77 @@ def _load_scan(
             st.session_state["scan_risk_profiles"] = snapshot.risk_profiles
             return result
 
-    period = "2y" if load_mode == "extended" else "1y"
-    chunk_size = 100 if load_mode == "extended" else 200
     with st.status("Preparing broad market scan", expanded=True) as status:
-        status.write("Refreshing US membership and curated international listings...")
-        universe_result = cached_broad_universe(date.today().isoformat(), refresh_token)
-        universe_result = _apply_geography_dimension(universe_result, config)
-        symbols = tuple(universe_result.data["Symbol"].tolist())
-        status.write(f"Found {len(symbols):,} classified and curated listings.")
         progress = st.progress(0, text="Waiting for price batches")
-        histories: dict[str, pd.DataFrame] = {}
-        warnings = []
-        chunks = [
-            symbols[offset : offset + chunk_size]
-            for offset in range(0, len(symbols), chunk_size)
-        ]
-        for index, chunk in enumerate(chunks, start=1):
-            chunk_result = cached_history_chunk(chunk, period, refresh_token)
-            histories.update(chunk_result.data)
-            if chunk_result.warning:
-                warnings.append(chunk_result.warning)
-            completed = min(index * chunk_size, len(symbols))
-            progress.progress(
-                index / len(chunks),
-                text=(
-                    f"Price history: {completed:,}/{len(symbols):,} symbols · "
-                    f"{len(histories):,} usable"
-                ),
-            )
-        status.write("Aggregating sectors and industries across four horizons...")
-        sectors, industries = broad_rotation_scan(universe_result.data, histories)
-        industries = _ensure_rotation_columns(industries)
-        status.write("Building adjustable stock evidence for gaining industries...")
-        industry_groups = set(
-            industries[["Region", "Sector", "Industry"]].itertuples(
-                index=False, name=None
-            )
+
+        def report(stage: str, completed: int, total: int, usable: int) -> None:
+            if stage == "Loading market universe":
+                status.write(
+                    "Refreshing US membership and curated international listings..."
+                )
+            elif stage == "Loading price history":
+                fraction = completed / total if total else 0
+                progress.progress(
+                    fraction,
+                    text=(
+                        f"Price history: {completed:,}/{total:,} symbols · "
+                        f"{usable:,} usable"
+                    ),
+                )
+            elif stage != "Complete":
+                status.write(stage)
+
+        snapshot = refresh_market_scan(
+            config,
+            load_mode,
+            scan_snapshot_store(),
+            as_of=date.today(),
+            universe_loader=lambda as_of: cached_broad_universe(
+                (as_of or date.today()).isoformat(), refresh_token
+            ),
+            history_loader=lambda symbols, period: cached_history_chunk(
+                symbols, period, refresh_token
+            ),
+            progress=report,
         )
-        candidates = breakout_candidates(
-            universe_result.data, histories, industry_groups
-        )
-        status.write("Profiling cached price risk for every usable stock...")
-        risk_profiles = build_market_risk_profiles(histories)
-        coverage = len(histories) / max(1, len(symbols)) * 100
-        provider_note = " · Some provider batches had gaps" if warnings else ""
-        warning = (
-            f"History coverage: {len(histories):,}/{len(symbols):,} "
-            f"({coverage:.1f}%){provider_note}"
+        progress.progress(
+            1.0,
+            text=(
+                f"Price history complete · {len(snapshot.risk_profiles):,} "
+                "usable symbols"
+            ),
         )
         status.update(
             label=(
-                f"Scan complete · {len(industries):,} industries · "
-                f"{len(candidates):,} filterable stocks"
+                f"Scan complete · {len(snapshot.industries):,} industries · "
+                f"{len(snapshot.candidates):,} filterable stocks"
             ),
             state="complete",
             expanded=False,
         )
-    completed_at = datetime.now(UTC)
-    scan_snapshot_store().save(
-        ScanSnapshot(
-            universe=universe_result.data,
-            sectors=sectors,
-            industries=industries,
-            candidates=candidates,
-            completed_at=completed_at,
-            source=universe_result.source,
-            coverage=coverage,
-            mode=load_mode,
-            model_version=scan_model_version,
-            warning=warning,
-            risk_profiles=risk_profiles,
-        )
+    universe_result = DataResult(
+        snapshot.universe,
+        snapshot.source,
+        snapshot.completed_at,
+        warning=snapshot.warning,
     )
     st.session_state["scan_snapshot_meta"] = {
-        "completed_at": completed_at,
-        "coverage": coverage,
+        "completed_at": snapshot.completed_at,
+        "coverage": snapshot.coverage,
         "mode": load_mode,
         "source": universe_result.source,
     }
     st.session_state["force_market_refresh"] = False
-    st.session_state["scan_risk_profiles"] = risk_profiles
-    result = universe_result, sectors, industries, candidates, warning
+    st.session_state["scan_risk_profiles"] = snapshot.risk_profiles
+    result = (
+        universe_result,
+        snapshot.sectors,
+        snapshot.industries,
+        snapshot.candidates,
+        snapshot.warning,
+    )
     st.session_state[result_key] = result
     return result
-
-
-def _apply_geography_dimension(
-    universe_result: DataResult, config: dict[str, Any]
-) -> DataResult:
-    frame = universe_result.data.copy()
-    frame["Listing region"] = frame["Region"]
-    selected_column = geography_column(config)
-    if selected_column == "Country":
-        countries = frame["Country"].replace({"": "Unknown"}).fillna("Unknown")
-        frame["Region"] = countries
-    return DataResult(
-        frame,
-        universe_result.source,
-        universe_result.retrieved_at,
-        universe_result.is_fallback,
-        universe_result.warning,
-    )
-
-
-def _ensure_rotation_columns(industries: pd.DataFrame) -> pd.DataFrame:
-    """Backfill unavailable rotation fields for hot-loaded legacy scan frames."""
-    required = {
-        "Momentum change",
-        "Liquidity change",
-        "Recent flow %",
-        "Rotation state",
-    }
-    if industries.empty:
-        return industries
-    frame = industries.copy()
-
-    def normalized(column: str, low: float, high: float) -> pd.Series:
-        return (100 * (frame[column] - low) / (high - low)).clip(0, 100)
-
-    if not required.issubset(frame.columns):
-        frame["Momentum change"] = (
-            (
-                normalized("Return 1W %", -5, 8)
-                + normalized("Return 1M %", -10, 15)
-            )
-            / 2
-            - (
-                normalized("Return 3M %", -20, 30)
-                + normalized("Return 6M %", -30, 50)
-            )
-            / 2
-        ).round(1)
-        frame["Liquidity change"] = (
-            (frame["Liquidity 1W"] + frame["Liquidity 1M"]) / 2
-            - (frame["Liquidity 3M"] + frame["Liquidity 6M"]) / 2
-        ).round(1)
-        frame["Recent flow %"] = (
-            (frame["Flow 1W %"] + frame["Flow 1M %"]) / 2
-        ).round(1)
-        frame["Rotation state"] = frame.apply(_rotation_state_from_row, axis=1)
-    early_defaults: dict[str, object] = {
-        "Early rotation score": 0.0,
-        "Early rotation signal": "Unavailable",
-        "Breadth acceleration": 0.0,
-        "RS inflection": 0.0,
-        "Positive dollar volume": 0.0,
-        "Close pressure": 0.0,
-    }
-    for column, default in early_defaults.items():
-        if column not in frame:
-            frame[column] = default
-    return frame
 
 
 def _cached_risk_profiles() -> pd.DataFrame:
@@ -1093,19 +1008,6 @@ def _cached_risk_profiles() -> pd.DataFrame:
         return pd.DataFrame()
     st.session_state["scan_risk_profiles"] = snapshot.risk_profiles
     return snapshot.risk_profiles
-
-
-def _rotation_state_from_row(row: pd.Series) -> str:
-    signals = (
-        float(row["Momentum change"]),
-        float(row["Liquidity change"]),
-        float(row["Recent flow %"]),
-    )
-    if all(value > 0 for value in signals):
-        return "Gaining"
-    if all(value < 0 for value in signals):
-        return "Losing"
-    return "Mixed"
 
 
 def _market_page(load_mode: str) -> None:
