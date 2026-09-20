@@ -26,6 +26,12 @@ flowchart LR
 Widgets do not import the application shell or manipulate unrelated page routes.
 They receive a `WidgetSpec`, the shared `AnalysisContext`, and explicit services.
 
+Every built-in widget title includes an **Info** popover sourced from
+`widget_help.py`. Each description documents Data origin, Calculation, Criteria,
+and Limitations. A registry-coverage test requires methodology for every built-in
+widget type; custom widgets receive an explicit undocumented notice until their
+help entry is added.
+
 ## Dashboard Configuration
 
 Packaged layouts are defined in `src/stockfinder/default_dashboards.json`. To
@@ -201,6 +207,8 @@ weighted gate; all values remain individually editable afterward.
 3. Register it in `built_in_widget_registry()`.
 4. Add the widget type to a dashboard JSON file.
 5. Add focused tests for configuration, context behavior, and domain output.
+6. Add a `WIDGET_HELP` entry covering origin data, calculations, criteria, and
+    limitations.
 
 ## Migration Roadmap
 

@@ -5,6 +5,7 @@ import streamlit as st
 from stockfinder.dashboard import DashboardSpec, WidgetSpec
 from stockfinder.dashboard_runtime import DashboardServices
 from stockfinder.navigation import AnalysisContext
+from stockfinder.widget_help import widget_methodology
 from stockfinder.widget_registry import WidgetRegistry
 
 
@@ -25,7 +26,19 @@ def render_dashboard(
         columns = st.columns([widget.width for widget in row])
         for column, widget in zip(columns, row, strict=True):
             with column:
-                st.subheader(widget.title)
+                heading, information = st.columns(
+                    [5, 1], vertical_alignment="center"
+                )
+                heading.subheader(widget.title)
+                with information.popover(
+                    "Info",
+                    icon=":material/info:",
+                    help="Data sources, calculations, thresholds, and limitations",
+                    type="tertiary",
+                    width="content",
+                    key=f"{widget.widget_id}_methodology",
+                ):
+                    st.markdown(widget_methodology(widget))
                 registry.resolve(widget.widget_type)(widget, context, services)
 
 
