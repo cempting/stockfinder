@@ -6,8 +6,7 @@ import pandas as pd
 
 from stockfinder.app import main
 from stockfinder.models import Score, SwingSetup
-from stockfinder.scan import apply_geography_dimension, ensure_rotation_columns
-from stockfinder.ui import (
+from stockfinder.presentation.ui import (
     PROMISING_CRITERIA,
     STOCKS_VIEWS,
     WORKSPACE_PAGES,
@@ -40,6 +39,7 @@ from stockfinder.ui import (
     _volatility_context,
     _volume_signal,
 )
+from stockfinder.scan import apply_geography_dimension, ensure_rotation_columns
 
 
 def test_main_launches_streamlit_with_active_interpreter() -> None:
@@ -119,7 +119,7 @@ def test_watchlist_is_not_a_legacy_stocks_subview() -> None:
 def test_app_script_renders_streamlit_ui() -> None:
     app_path = Path(__file__).parents[1] / "src" / "stockfinder" / "app.py"
 
-    with patch("stockfinder.ui.main") as ui_main:
+    with patch("stockfinder.presentation.ui.main") as ui_main:
         runpy.run_path(str(app_path), run_name="__main__")
 
     ui_main.assert_called_once_with()
@@ -583,7 +583,9 @@ def test_gettex_availability_marks_imported_and_unavailable_symbols(
         def load(self):
             return pd.DataFrame({"Symbol": ["SAP.DE"]})
 
-    monkeypatch.setattr("stockfinder.ui.gettex_instrument_store", lambda: Store())
+    monkeypatch.setattr(
+        "stockfinder.presentation.ui.gettex_instrument_store", lambda: Store()
+    )
     stocks = pd.DataFrame({"Symbol": ["SAP.DE", "AAPL"]})
 
     enriched = _add_gettex_availability(stocks)
@@ -598,7 +600,9 @@ def test_gettex_availability_is_unverified_without_import(monkeypatch) -> None:
         def load(self):
             return pd.DataFrame(columns=["Symbol"])
 
-    monkeypatch.setattr("stockfinder.ui.gettex_instrument_store", lambda: Store())
+    monkeypatch.setattr(
+        "stockfinder.presentation.ui.gettex_instrument_store", lambda: Store()
+    )
 
     enriched = _add_gettex_availability(pd.DataFrame({"Symbol": ["AAPL"]}))
 

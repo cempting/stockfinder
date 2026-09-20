@@ -51,15 +51,12 @@ with the presentation framework, not private implementation details of the main
 UI. A widget receives `WidgetSpec`, `AnalysisContext`, and `DashboardServices`;
 it should not reach into the application shell.
 
-## Compatibility imports
+## Canonical imports
 
-The former flat modules such as `stockfinder.ui`, `stockfinder.dashboard`,
-`stockfinder.storage`, and `stockfinder.config` remain module-identity aliases.
-Existing integrations and monkeypatch-based tests therefore continue to work,
-while new production code should import from the canonical packages.
-
-Compatibility aliases can be removed in a future major release after downstream
-callers migrate.
+Import presentation and infrastructure modules through their owning packages,
+for example `stockfinder.presentation.ui` and
+`stockfinder.infrastructure.storage`. Flat compatibility modules are not kept;
+one canonical path avoids duplicate files and ambiguous ownership.
 
 ## Placement rules
 

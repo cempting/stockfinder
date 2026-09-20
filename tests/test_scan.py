@@ -4,15 +4,15 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from stockfinder.config import default_analysis_config
 from stockfinder.data import DataResult
+from stockfinder.infrastructure.config import default_analysis_config
+from stockfinder.infrastructure.storage import ScanSnapshot, ScanSnapshotStore
 from stockfinder.scan import (
     RefreshAlreadyRunningError,
     main,
     refresh_market_scan,
     refresh_process_lock,
 )
-from stockfinder.storage import ScanSnapshot, ScanSnapshotStore
 
 
 def test_refresh_market_scan_builds_and_persists_snapshot(tmp_path) -> None:

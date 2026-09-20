@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from stockfinder.config import (
+from stockfinder.infrastructure.config import (
     AnalysisConfigStore,
     apply_profile_composition_preset,
     configured_alert_rules,

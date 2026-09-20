@@ -34,7 +34,8 @@ help entry is added.
 
 ## Dashboard Configuration
 
-Packaged layouts are defined in `src/stockfinder/default_dashboards.json`. To
+Packaged layouts are defined in
+`src/stockfinder/presentation/default_dashboards.json`. To
 customize a deployment without changing source code, create
 `data/dashboards.json`, or place it under `STOCKFINDER_DATA_DIR`.
 

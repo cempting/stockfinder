@@ -2,10 +2,13 @@ import json
 
 import pytest
 
-from stockfinder.dashboard import load_application_dashboards, load_dashboards
-from stockfinder.dashboard_renderer import _widget_rows
-from stockfinder.navigation import AnalysisContext
-from stockfinder.widget_registry import WidgetRegistry
+from stockfinder.presentation.dashboard import (
+    load_application_dashboards,
+    load_dashboards,
+)
+from stockfinder.presentation.dashboard_renderer import _widget_rows
+from stockfinder.presentation.navigation import AnalysisContext
+from stockfinder.presentation.widget_registry import WidgetRegistry
 from stockfinder.widgets import built_in_widget_registry
 from stockfinder.widgets.rotation_explorer import _ordered_groups
 

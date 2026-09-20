@@ -12,7 +12,7 @@ from stockfinder.alert_delivery import (
     deliver_if_changed,
     main,
 )
-from stockfinder.storage import (
+from stockfinder.infrastructure.storage import (
     MarketHistoryCache,
     Repository,
     ScanSnapshot,

@@ -1,5 +1,9 @@
-from stockfinder.dashboard import WidgetSpec
-from stockfinder.widget_help import SECTIONS, WIDGET_HELP, widget_methodology
+from stockfinder.presentation.dashboard import WidgetSpec
+from stockfinder.presentation.widget_help import (
+    SECTIONS,
+    WIDGET_HELP,
+    widget_methodology,
+)
 from stockfinder.widgets import built_in_widget_registry
 
 

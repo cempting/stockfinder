@@ -4,8 +4,8 @@ from datetime import UTC, datetime
 import pandas as pd
 import pytest
 
-from stockfinder.runtime import application_data_dir
-from stockfinder.storage import (
+from stockfinder.infrastructure.runtime import application_data_dir
+from stockfinder.infrastructure.storage import (
     CompanyProfileCache,
     GettexInstrumentStore,
     MarketHistoryCache,
