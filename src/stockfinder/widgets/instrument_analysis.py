@@ -1,8 +1,10 @@
 """Generic stock, ETF, and index analysis widget."""
 
+import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from stockfinder.presentation.charting import add_volume_bars, price_volume_subplots
 from stockfinder.presentation.dashboard import WidgetSpec
 from stockfinder.presentation.dashboard_runtime import DashboardServices
 from stockfinder.presentation.navigation import AnalysisContext
@@ -48,22 +50,35 @@ def render_instrument_analysis(
     safety.metric("Safety", f"{_safety(result.analysis.risk.value):.1f}/10")
     technical.metric("Technical", f"{_score(result.analysis.technical.value):.1f}/10")
 
-    history = result.history.data.tail(252).copy()
+    figure = _instrument_figure(result.history.data.tail(252).copy())
+    st.plotly_chart(figure, width="stretch", key=f"{spec.widget_id}_price")
+    source = result.history.source
+    st.caption(f"Source: {source} · quality, risk, and technical scores stay separate")
+
+
+def _instrument_figure(history: pd.DataFrame) -> go.Figure:
+    """Plot price trends and aligned daily trading volume."""
     history["SMA50"] = history["Close"].rolling(50).mean()
     history["SMA150"] = history["Close"].rolling(150).mean()
-    figure = go.Figure()
-    figure.add_scatter(x=history.index, y=history["Close"], name="Price")
-    figure.add_scatter(x=history.index, y=history["SMA50"], name="SMA50")
-    figure.add_scatter(x=history.index, y=history["SMA150"], name="SMA150")
+    figure = price_volume_subplots()
+    figure.add_scatter(
+        x=history.index, y=history["Close"], name="Price", row=1, col=1
+    )
+    figure.add_scatter(
+        x=history.index, y=history["SMA50"], name="SMA50", row=1, col=1
+    )
+    figure.add_scatter(
+        x=history.index, y=history["SMA150"], name="SMA150", row=1, col=1
+    )
+    add_volume_bars(figure, history)
     figure.update_layout(
-        height=390,
+        height=470,
         margin={"l": 0, "r": 0, "t": 10, "b": 0},
         hovermode="x unified",
         legend={"orientation": "h"},
     )
-    st.plotly_chart(figure, width="stretch", key=f"{spec.widget_id}_price")
-    source = result.history.source
-    st.caption(f"Source: {source} · quality, risk, and technical scores stay separate")
+    figure.update_xaxes(rangeslider_visible=False)
+    return figure
 
 
 def _score(value: float) -> float:

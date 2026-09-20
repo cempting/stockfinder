@@ -9,7 +9,6 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
-from plotly.subplots import make_subplots
 
 from stockfinder.analysis import (
     AnalysisResult,
@@ -19,7 +18,7 @@ from stockfinder.analysis import (
     calculate_position_plan,
     calculate_reward_risk,
     classify_market_regime,
-    normalized_performance,
+    normalized_performance_from_histories,
 )
 from stockfinder.data import (
     METAL_PROXIES,
@@ -43,6 +42,11 @@ from stockfinder.infrastructure.storage import (
     ScanSnapshotStore,
 )
 from stockfinder.models import Score, SwingSetup
+from stockfinder.presentation.charting import (
+    add_relative_volume_lines,
+    add_volume_bars,
+    price_volume_subplots,
+)
 from stockfinder.presentation.dashboard import load_application_dashboards
 from stockfinder.presentation.dashboard_renderer import render_dashboard
 from stockfinder.presentation.dashboard_runtime import DashboardServices
@@ -486,6 +490,7 @@ def _metals_performance_chart(
     histories: dict[str, pd.DataFrame], ranked: pd.DataFrame
 ) -> go.Figure:
     series = {}
+    volume_histories = {}
     names = ranked.set_index("Symbol")["Metal"].to_dict()
     for symbol, metal in names.items():
         history = histories.get(symbol)
@@ -497,28 +502,45 @@ def _metals_performance_chart(
             close = close[~close.index.duplicated(keep="last")]
         if not close.empty:
             series[str(metal)] = close / close.iloc[0] * 100
+            volume_histories[str(metal)] = history.tail(126)
     performance = pd.DataFrame(series)
-    figure = px.line(
-        performance,
-        labels={"value": "Growth of 100", "index": "Date", "variable": "Metal"},
-        title="Six-month relative performance",
+    figure = price_volume_subplots(row_heights=(0.68, 0.32))
+    for metal in performance:
+        figure.add_scatter(
+            x=performance.index,
+            y=performance[metal],
+            name=metal,
+            row=1,
+            col=1,
+        )
+    add_relative_volume_lines(figure, volume_histories)
+    figure.update_layout(
+        title="Six-month relative performance and volume",
+        height=530,
+        hovermode="x unified",
+        legend_title_text="",
     )
-    figure.update_layout(height=430, hovermode="x unified", legend_title_text="")
+    figure.update_yaxes(title_text="Growth of 100", row=1, col=1)
     return figure
 
 
 def _metal_price_chart(history: pd.DataFrame, metal: object) -> go.Figure:
     close = history["Close"].dropna()
     sma50 = close.rolling(50).mean()
-    figure = go.Figure()
-    figure.add_trace(go.Scatter(x=close.index, y=close, name=str(metal)))
-    figure.add_trace(go.Scatter(x=sma50.index, y=sma50, name="SMA50"))
-    figure.update_layout(
-        title=f"{metal} proxy price and 50-day trend",
-        height=440,
-        hovermode="x unified",
-        yaxis_title="USD",
+    figure = price_volume_subplots()
+    figure.add_trace(
+        go.Scatter(x=close.index, y=close, name=str(metal)), row=1, col=1
     )
+    figure.add_trace(
+        go.Scatter(x=sma50.index, y=sma50, name="SMA50"), row=1, col=1
+    )
+    add_volume_bars(figure, history)
+    figure.update_layout(
+        title=f"{metal} proxy price, 50-day trend, and volume",
+        height=530,
+        hovermode="x unified",
+    )
+    figure.update_yaxes(title_text="USD", row=1, col=1)
     return figure
 
 
@@ -1107,13 +1129,27 @@ def _market_page(load_mode: str) -> None:
         "They do not measure subscriptions, redemptions, or cash flows directly."
     )
 
-    performance = normalized_performance(symbols[:3])
-    figure = px.line(
+    comparison_histories = {
+        symbol: market_histories[symbol] for symbol in symbols[:3]
+    }
+    performance = normalized_performance_from_histories(comparison_histories)
+    figure = price_volume_subplots(row_heights=(0.68, 0.32))
+    for symbol, color in zip(
         performance,
-        labels={"value": "Growth of 100", "index": "Date", "variable": "Index"},
-        color_discrete_sequence=["#49c28a", "#f4c95d", "#4f8edc"],
-    )
-    figure.update_layout(height=330, legend_title_text="", hovermode="x unified")
+        ("#49c28a", "#f4c95d", "#4f8edc"),
+        strict=True,
+    ):
+        figure.add_scatter(
+            x=performance.index,
+            y=performance[symbol],
+            name=symbol,
+            line={"color": color},
+            row=1,
+            col=1,
+        )
+    add_relative_volume_lines(figure, comparison_histories)
+    figure.update_layout(height=430, legend_title_text="", hovermode="x unified")
+    figure.update_yaxes(title_text="Growth of 100", row=1, col=1)
     st.plotly_chart(figure, width="stretch")
 
     universe, _, industries, _, history_warning = _load_scan(load_mode)
@@ -1322,9 +1358,11 @@ def _industry_proxy_figure(
     benchmark = benchmark_history["Close"].dropna()
     normalized = close / close.iloc[0] * 100
     benchmark_normalized = benchmark / benchmark.iloc[0] * 100
-    figure = go.Figure()
+    figure = price_volume_subplots()
     figure.add_trace(
-        go.Scatter(x=normalized.index, y=normalized, name=proxy, line={"width": 3})
+        go.Scatter(x=normalized.index, y=normalized, name=proxy, line={"width": 3}),
+        row=1,
+        col=1,
     )
     figure.add_trace(
         go.Scatter(
@@ -1332,7 +1370,9 @@ def _industry_proxy_figure(
             y=normalized.rolling(50).mean(),
             name="SMA50",
             line={"color": "#2364aa"},
-        )
+        ),
+        row=1,
+        col=1,
     )
     figure.add_trace(
         go.Scatter(
@@ -1340,7 +1380,9 @@ def _industry_proxy_figure(
             y=normalized.rolling(150).mean(),
             name="SMA150",
             line={"color": "#d4a017"},
-        )
+        ),
+        row=1,
+        col=1,
     )
     figure.add_trace(
         go.Scatter(
@@ -1348,14 +1390,17 @@ def _industry_proxy_figure(
             y=benchmark_normalized,
             name="SPY",
             line={"color": "#7d8990", "dash": "dot"},
-        )
+        ),
+        row=1,
+        col=1,
     )
+    add_volume_bars(figure, history)
     figure.update_layout(
-        height=390,
-        yaxis_title="Growth of 100",
+        height=480,
         legend_title_text="",
         hovermode="x unified",
     )
+    figure.update_yaxes(title_text="Growth of 100", row=1, col=1)
     return figure
 
 
@@ -1364,7 +1409,9 @@ def _industry_proxy_thumbnail(
 ) -> go.Figure:
     close = history["Close"].dropna()
     normalized = close / close.iloc[0] * 100
-    figure = go.Figure()
+    figure = price_volume_subplots(
+        row_heights=(0.76, 0.24), vertical_spacing=0.03
+    )
     figure.add_trace(
         go.Scatter(
             x=normalized.index,
@@ -1373,7 +1420,9 @@ def _industry_proxy_thumbnail(
             mode="lines+markers",
             line={"color": "#49c28a", "width": 2},
             marker={"size": 8, "opacity": 0},
-        )
+        ),
+        row=1,
+        col=1,
     )
     figure.add_trace(
         go.Scatter(
@@ -1381,18 +1430,22 @@ def _industry_proxy_thumbnail(
             y=normalized.rolling(50).mean(),
             name="SMA50",
             line={"color": "#f4c95d", "width": 1.5},
-        )
+        ),
+        row=1,
+        col=1,
     )
+    add_volume_bars(figure, history, showlegend=False)
     figure.update_layout(
         title={"text": label, "font": {"size": 14}},
-        height=230,
+        height=270,
         margin={"t": 42, "l": 12, "r": 12, "b": 12},
         showlegend=False,
         hovermode="x unified",
         clickmode="event+select",
-        xaxis={"showgrid": False, "title": None},
-        yaxis={"showgrid": True, "title": None},
     )
+    figure.update_xaxes(showgrid=False, title=None)
+    figure.update_yaxes(showgrid=True, title=None, row=1, col=1)
+    figure.update_yaxes(showticklabels=False, title=None, row=2, col=1)
     return figure
 
 
@@ -2931,13 +2984,7 @@ def _price_chart(result: AnalysisResult) -> go.Figure:
     history = result.history.data.tail(378).copy()
     history["SMA 50"] = history["Close"].rolling(50).mean()
     history["SMA 150"] = history["Close"].rolling(150).mean()
-    figure = make_subplots(
-        rows=2,
-        cols=1,
-        shared_xaxes=True,
-        vertical_spacing=0.05,
-        row_heights=[0.74, 0.26],
-    )
+    figure = price_volume_subplots()
     figure.add_trace(
         go.Candlestick(
             x=history.index,
@@ -2972,17 +3019,7 @@ def _price_chart(result: AnalysisResult) -> go.Figure:
         row=1,
         col=1,
     )
-    colors = [
-        "#0b6e4f" if close >= open_ else "#d95d39"
-        for close, open_ in zip(history["Close"], history["Open"], strict=True)
-    ]
-    figure.add_trace(
-        go.Bar(
-            x=history.index, y=history["Volume"], marker_color=colors, name="Volume"
-        ),
-        row=2,
-        col=1,
-    )
+    add_volume_bars(figure, history)
     figure.update_layout(
         height=620, xaxis_rangeslider_visible=False, hovermode="x unified"
     )
@@ -3394,12 +3431,20 @@ def _peer_panel(symbol: str) -> None:
     peer_symbols = peers["Symbol"].head(5).tolist()
     symbols = list(dict.fromkeys([symbol, *peer_symbols, "SPY"]))
     st.caption(f"Compared with leading available {industry} peers and SPY.")
-    performance = normalized_performance(symbols)
-    figure = px.line(
-        performance,
-        labels={"value": "Growth of 100", "variable": "Symbol", "index": "Date"},
-    )
-    figure.update_layout(height=430, hovermode="x unified")
+    histories = {item: get_history(item, "6mo").data for item in symbols}
+    performance = normalized_performance_from_histories(histories)
+    figure = price_volume_subplots(row_heights=(0.68, 0.32))
+    for item in performance:
+        figure.add_scatter(
+            x=performance.index,
+            y=performance[item],
+            name=item,
+            row=1,
+            col=1,
+        )
+    add_relative_volume_lines(figure, histories)
+    figure.update_layout(height=530, hovermode="x unified")
+    figure.update_yaxes(title_text="Growth of 100", row=1, col=1)
     st.plotly_chart(figure, width="stretch")
 
 

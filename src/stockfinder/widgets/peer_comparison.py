@@ -6,6 +6,10 @@ import streamlit as st
 
 from stockfinder.analysis import normalized_performance_from_histories
 from stockfinder.infrastructure.config import configured_proxy
+from stockfinder.presentation.charting import (
+    add_relative_volume_lines,
+    price_volume_subplots,
+)
 from stockfinder.presentation.dashboard import WidgetSpec
 from stockfinder.presentation.dashboard_runtime import DashboardServices
 from stockfinder.presentation.navigation import AnalysisContext
@@ -70,31 +74,7 @@ def render_peer_comparison(
         st.info(f"No comparable price history is available for {symbol}.")
         return
 
-    figure = go.Figure()
-    for item in performance:
-        role = (
-            "Selected"
-            if item == symbol
-            else "Benchmark"
-            if item == benchmark
-            else "Peer"
-        )
-        figure.add_scatter(
-            x=performance.index,
-            y=performance[item],
-            name=f"{item} · {role}",
-            line={
-                "width": 3 if item == symbol else 2,
-                "dash": "dot" if item == benchmark else "solid",
-            },
-        )
-    figure.update_layout(
-        height=410,
-        margin={"l": 0, "r": 0, "t": 10, "b": 0},
-        hovermode="x unified",
-        legend={"orientation": "h"},
-        yaxis_title="Growth of 100",
-    )
+    figure = _peer_comparison_figure(performance, results, symbol, benchmark)
     st.plotly_chart(figure, width="stretch", key=f"{spec.widget_id}_comparison")
 
     returns = performance.ffill().iloc[-1] - 100
@@ -135,3 +115,44 @@ def render_peer_comparison(
         f"{len(peers)} peers · benchmark {benchmark} ({benchmark_role}) · "
         f"sources: {', '.join(sources)}"
     )
+
+
+def _peer_comparison_figure(
+    performance: pd.DataFrame,
+    results: dict[str, object],
+    symbol: str,
+    benchmark: str,
+) -> go.Figure:
+    """Plot relative prices with comparable volume participation beneath."""
+    figure = price_volume_subplots(row_heights=(0.7, 0.3))
+    for item in performance:
+        role = (
+            "Selected"
+            if item == symbol
+            else "Benchmark"
+            if item == benchmark
+            else "Peer"
+        )
+        figure.add_scatter(
+            x=performance.index,
+            y=performance[item],
+            name=f"{item} · {role}",
+            line={
+                "width": 3 if item == symbol else 2,
+                "dash": "dot" if item == benchmark else "solid",
+            },
+            row=1,
+            col=1,
+        )
+    add_relative_volume_lines(
+        figure,
+        {item: result.data for item, result in results.items()},
+    )
+    figure.update_layout(
+        height=510,
+        margin={"l": 0, "r": 0, "t": 10, "b": 0},
+        hovermode="x unified",
+        legend={"orientation": "h"},
+    )
+    figure.update_yaxes(title_text="Growth of 100", row=1, col=1)
+    return figure

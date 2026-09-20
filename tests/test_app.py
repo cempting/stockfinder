@@ -23,7 +23,9 @@ from stockfinder.presentation.ui import (
     _fundamental_signal,
     _industry_browser_frame,
     _industry_proxy,
+    _industry_proxy_figure,
     _industry_proxy_thumbnail,
+    _metal_price_chart,
     _metal_summary,
     _metals_performance_chart,
     _rank_promising_stocks,
@@ -207,8 +209,14 @@ def test_metals_chart_aligns_mixed_timezone_histories() -> None:
     naive_dates = pd.bdate_range("2026-01-01", periods=60)
     aware_dates = naive_dates.tz_localize("America/New_York")
     histories = {
-        "GLD": pd.DataFrame({"Close": range(100, 160)}, index=aware_dates),
-        "SLV": pd.DataFrame({"Close": range(80, 140)}, index=naive_dates),
+        "GLD": pd.DataFrame(
+            {"Close": range(100, 160), "Volume": range(1_000, 1_060)},
+            index=aware_dates,
+        ),
+        "SLV": pd.DataFrame(
+            {"Close": range(80, 140), "Volume": range(2_000, 2_060)},
+            index=naive_dates,
+        ),
     }
     ranked = pd.DataFrame(
         {"Symbol": ["GLD", "SLV"], "Metal": ["Gold", "Silver"]}
@@ -217,9 +225,33 @@ def test_metals_chart_aligns_mixed_timezone_histories() -> None:
     figure = _metals_performance_chart(histories, ranked)
     figure_data = figure.to_dict()["data"]
 
-    assert len(figure_data) == 2
+    assert len(figure_data) == 4
     for trace in figure_data:
         assert pd.DatetimeIndex(trace["x"]).tz is None
+    assert [trace["name"] for trace in figure_data[-2:]] == [
+        "Gold volume",
+        "Silver volume",
+    ]
+    assert all(trace["yaxis"] == "y2" for trace in figure_data[-2:])
+
+
+def test_single_instrument_detail_charts_include_raw_volume() -> None:
+    dates = pd.bdate_range("2026-01-01", periods=180)
+    history = pd.DataFrame(
+        {
+            "Close": range(100, 280),
+            "Volume": range(1_000, 1_180),
+        },
+        index=dates,
+    )
+
+    metal_figure = _metal_price_chart(history, "Gold")
+    industry_figure = _industry_proxy_figure("SMH", history, history)
+
+    for figure in (metal_figure, industry_figure):
+        assert figure.data[-1].name == "Volume"
+        assert figure.data[-1].type == "bar"
+        assert figure.data[-1].yaxis == "y2"
 
 
 def test_fundamental_signal_uses_best_available_core_score() -> None:
@@ -641,10 +673,12 @@ def test_industry_proxy_thumbnail_is_compact_and_selectable() -> None:
     figure = _industry_proxy_thumbnail("SMH", "Semiconductors", history)
     figure_data = figure.to_dict()
 
-    assert len(figure_data["data"]) == 2
+    assert len(figure_data["data"]) == 3
     assert figure_data["data"][0]["mode"] == "lines+markers"
     assert figure_data["data"][0]["marker"]["opacity"] == 0
-    assert figure.layout.height == 230
+    assert figure_data["data"][-1]["name"] == "Volume"
+    assert figure_data["data"][-1]["yaxis"] == "y2"
+    assert figure.layout.height == 270
     assert figure.layout.clickmode == "event+select"
     assert not figure.layout.showlegend
 

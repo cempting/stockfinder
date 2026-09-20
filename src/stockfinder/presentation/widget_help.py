@@ -181,7 +181,8 @@ Price and daily change come from the latest two closes. Quality is the mean of
 available normalized fundamental pillars. Observed risk averages annualized
 volatility, maximum drawdown, debt-to-equity, and inverse current-ratio evidence;
 Safety displays `100 - risk`. Technical score averages price above SMA50/SMA150,
-moving-average direction, heartbeat structure, and relative 20-day volume.
+moving-average direction, heartbeat structure, and relative 20-day volume. The
+lower chart row shows raw daily trading volume aligned with price.
 
 **Criteria**
 
@@ -234,7 +235,9 @@ sector, then regional fallback. Price history covers six months.
 
 Each nonempty Close series is normalized to 100 at its first available date.
 Six-month return is the final normalized value minus 100; relative return is the
-selected instrument return minus the configured benchmark return.
+selected instrument return minus the configured benchmark return. The lower row
+shows each instrument's daily volume divided by its rolling 20-day average, which
+makes participation comparable across instruments with different share counts.
 
 **Criteria**
 

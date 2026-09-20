@@ -10,6 +10,7 @@ from stockfinder.presentation.dashboard_renderer import _widget_rows
 from stockfinder.presentation.navigation import AnalysisContext
 from stockfinder.presentation.widget_registry import WidgetRegistry
 from stockfinder.widgets import built_in_widget_registry
+from stockfinder.widgets.instrument_analysis import _instrument_figure
 from stockfinder.widgets.rotation_explorer import _ordered_groups
 
 
@@ -47,6 +48,30 @@ def test_default_dashboards_define_multiple_widget_compositions() -> None:
         "risk",
         "technical",
     ]
+
+
+def test_instrument_chart_includes_aligned_volume() -> None:
+    import pandas as pd
+
+    dates = pd.bdate_range("2026-01-01", periods=180)
+    history = pd.DataFrame(
+        {
+            "Close": range(100, 280),
+            "Volume": range(1_000, 1_180),
+        },
+        index=dates,
+    )
+
+    figure = _instrument_figure(history)
+
+    assert [trace.name for trace in figure.data] == [
+        "Price",
+        "SMA50",
+        "SMA150",
+        "Volume",
+    ]
+    assert figure.data[-1].type == "bar"
+    assert figure.data[-1].yaxis == "y2"
 
 
 def test_application_dashboards_use_data_directory_override(
