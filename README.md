@@ -5,6 +5,10 @@ fundamental and risk evaluation, and technical confirmation.
 
 The product vision and requirements gathered during discovery are documented
 in [docs/product-vision.md](docs/product-vision.md).
+Optional licensed-provider adapters are documented in
+[docs/provider-integration.md](docs/provider-integration.md).
+The latest local and Streamlit Cloud acceptance findings are recorded in
+[docs/acceptance-report-2026-09-20.md](docs/acceptance-report-2026-09-20.md).
 
 ## Setup
 
@@ -86,6 +90,20 @@ broker-availability filter while retaining global market and industry analysis.
 ISIN-only broker exports cannot currently be matched because the public universe
 does not provide reliable ISIN identifiers. Add a Yahoo-compatible symbol column
 before importing such a file.
+
+## External Data Providers
+
+Optional macro-event, news/sentiment, institutional-disclosure, and constituent
+providers are discovered through the `stockfinder.providers` Python entry-point
+group. Inspect installed capability coverage without fetching provider data:
+
+```bash
+stockfinder-providers
+```
+
+No external adapter or credential is installed by default. Missing capabilities
+return typed empty results with explicit warnings; they never generate synthetic
+macro, news, sentiment, flow, or constituent records.
 
 ## Container Deployment
 
