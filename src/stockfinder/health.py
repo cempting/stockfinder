@@ -99,6 +99,8 @@ def evaluate_health(
             snapshot.model_version or "Missing model version",
         )
     )
+    if snapshot.warning:
+        checks.append(HealthCheck("Snapshot warning", "WARN", snapshot.warning))
     return tuple(checks)
 
 

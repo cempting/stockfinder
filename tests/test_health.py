@@ -55,6 +55,29 @@ def test_health_fails_stale_low_coverage_snapshot(tmp_path) -> None:
     assert failed == {"Scan freshness", "History coverage"}
 
 
+def test_health_surfaces_snapshot_warning(tmp_path) -> None:
+    now = datetime(2026, 9, 20, 12, tzinfo=UTC)
+    _save_snapshot(tmp_path, now)
+    store = ScanSnapshotStore(tmp_path / "latest_scan")
+    snapshot = store.load()
+    assert snapshot is not None
+    store.save(
+        ScanSnapshot(
+            **{
+                **snapshot.__dict__,
+                "warning": "Some provider batches had gaps",
+            }
+        )
+    )
+
+    checks = evaluate_health(tmp_path, now=now)
+
+    assert health_exit_code(checks) == 1
+    assert checks[-1] == checks[-1].__class__(
+        "Snapshot warning", "WARN", "Some provider batches had gaps"
+    )
+
+
 def test_health_cli_emits_json_and_failure_exit(monkeypatch, tmp_path, capsys) -> None:
     monkeypatch.setenv("STOCKFINDER_DATA_DIR", str(tmp_path))
 

@@ -223,6 +223,10 @@ ZIP archives with per-file SHA-256 checksums, captures SQLite through its online
 backup API, and restores only to a new or empty directory. Neither command runs as
 a hidden process inside Streamlit; scheduling, secret injection, retention, and
 restored-data activation remain explicit deployment responsibilities.
+`stockfinder-health` complements Streamlit's HTTP liveness endpoint with read-only
+configuration, SQLite, scan-freshness, coverage, table, risk-profile, model, and
+provider-warning checks. Its `0`, `1`, and `2` exit codes represent healthy,
+warning, and failed states for external monitoring.
 
 The current international universe remains representative rather than exhaustive.
 Completing step 3 requires a reliable constituent/classification provider or a

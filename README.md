@@ -247,6 +247,27 @@ Inspect the restored directory before switching `STOCKFINDER_DATA_DIR` to it.
 Restore intentionally refuses to overwrite a populated directory. This preserves
 the current data set until the restored copy has been verified independently.
 
+## Operational Health
+
+`stockfinder-health` checks persisted analytical state without fetching providers
+or modifying application data:
+
+```bash
+stockfinder-health
+stockfinder-health --json
+stockfinder-health --max-scan-age-hours 96 --minimum-coverage-pct 90
+```
+
+Checks cover analysis-configuration validity, SQLite integrity, scan age, history
+coverage, required snapshot tables, cached risk profiles, model-version presence,
+and persisted scan warnings. Exit code `0` means healthy, `1` means one or more
+warnings, and `2` means a failed check. The default 96-hour failure threshold
+allows for weekends; scans older than half that threshold warn.
+
+Use the existing `/_stcore/health` endpoint for process liveness and this command
+for analytical-data health. Monitoring systems can schedule the JSON form and
+alert on its exit code independently from the web server.
+
 ## Long Swing Rule
 
 Stock research evaluates trend, prior advance, the longest valid 5-, 7-, 10-,
