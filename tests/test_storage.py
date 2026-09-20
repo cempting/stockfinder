@@ -1,3 +1,4 @@
+import sqlite3
 from datetime import UTC, datetime
 
 import pandas as pd
@@ -23,6 +24,14 @@ def test_watchlist_round_trip(tmp_path) -> None:
     assert row["symbol"] == "NVDA"
     assert row["notes"] == "Strong growth"
     assert row["target_price"] == 130.0
+
+    repository.save_watchlist("nvda", "Updated", 105.0, None, 95.0)
+    updated = repository.watchlist().iloc[0]
+    assert updated["notes"] == "Updated"
+    assert pd.isna(updated["target_price"])
+
+    repository.delete_watchlist("NVDA")
+    assert repository.watchlist().empty
 
 
 def test_market_history_cache_merges_and_restores_last_known_data(tmp_path) -> None:
@@ -83,11 +92,33 @@ def test_gettex_store_rejects_csv_without_symbol_column(tmp_path) -> None:
 def test_position_round_trip_and_delete(tmp_path) -> None:
     repository = Repository(tmp_path / "stockfinder.db")
 
-    repository.save_position("msft", 4.0, 420.0, "2026-08-27")
+    repository.save_position("msft", 4.0, 420.0, "2026-08-27", "EUR")
     assert repository.positions().iloc[0]["symbol"] == "MSFT"
+    assert repository.positions().iloc[0]["currency"] == "EUR"
+
+    repository.save_position("msft", 5.0, 410.0, "2026-08-28")
+    updated = repository.positions().iloc[0]
+    assert updated["quantity"] == 5.0
+    assert updated["entry_price"] == 410.0
 
     repository.delete_position("MSFT")
     assert repository.positions().empty
+
+
+def test_repository_migrates_legacy_positions_to_usd(tmp_path) -> None:
+    path = tmp_path / "stockfinder.db"
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "CREATE TABLE positions (symbol TEXT PRIMARY KEY, quantity REAL, "
+            "entry_price REAL, entry_date TEXT, updated_at TEXT)"
+        )
+        connection.execute(
+            "INSERT INTO positions VALUES ('AAPL', 2, 100, '2026-01-01', 'now')"
+        )
+
+    repository = Repository(path)
+
+    assert repository.positions().iloc[0]["currency"] == "USD"
 
 
 def test_scan_snapshot_round_trip(tmp_path) -> None:

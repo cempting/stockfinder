@@ -8,10 +8,11 @@ from stockfinder.app import main
 from stockfinder.models import Score, SwingSetup
 from stockfinder.ui import (
     PROMISING_CRITERIA,
+    STOCKS_VIEWS,
+    WORKSPACE_PAGES,
     _add_gettex_availability,
     _apply_geography_dimension,
     _consume_pending_navigation,
-    _enrich_with_cached_risk,
     _ensure_rotation_columns,
     _filter_fundamental_candidates,
     _filter_gettex_availability,
@@ -92,6 +93,24 @@ def test_invalid_pending_navigation_is_discarded() -> None:
     _consume_pending_navigation(state)
 
     assert state == {"workspace_page": "Market pulse"}
+
+
+def test_portfolio_workflow_is_not_a_legacy_workspace_route() -> None:
+    state = {"pending_workspace_page": "Portfolio"}
+
+    _consume_pending_navigation(state)
+
+    assert "Portfolio" not in WORKSPACE_PAGES
+    assert state == {}
+
+
+def test_watchlist_is_not_a_legacy_stocks_subview() -> None:
+    state = {"pending_stocks_workspace_view": "Watchlist"}
+
+    _consume_pending_navigation(state)
+
+    assert "Watchlist" not in STOCKS_VIEWS
+    assert state == {}
 
 
 def test_app_script_renders_streamlit_ui() -> None:
@@ -236,25 +255,6 @@ def test_rotation_columns_are_added_for_hot_loaded_scan_schema() -> None:
         "Unavailable",
         "Unavailable",
     ]
-
-
-def test_cached_risk_enrichment_does_not_require_complete_analysis(monkeypatch) -> None:
-    profiles = pd.DataFrame(
-        {
-            "Symbol": ["AAPL"],
-            "Last price": [250.0],
-            "Market risk": [42.0],
-            "Risk label": ["Moderate"],
-            "ATR %": [2.1],
-        }
-    )
-    monkeypatch.setattr("stockfinder.ui._cached_risk_profiles", lambda: profiles)
-
-    enriched = _enrich_with_cached_risk(pd.DataFrame({"symbol": ["AAPL", "NEW"]}))
-
-    assert enriched.loc[0, "last_price"] == 250
-    assert enriched.loc[0, "market_risk"] == 42
-    assert pd.isna(enriched.loc[1, "last_price"])
 
 
 def test_adjustable_technical_candidate_filters() -> None:

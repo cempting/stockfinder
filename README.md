@@ -34,6 +34,21 @@ streamlit run src/stockfinder/ui.py
 
 The application opens at <http://localhost:8501> by default.
 
+## Configurable Dashboards
+
+The default **Command Center** is composed from registered widgets rather than a
+fixed page. Packaged dashboard definitions live in
+`src/stockfinder/default_dashboards.json`. Create `data/dashboards.json` (or the
+same file under `STOCKFINDER_DATA_DIR`) to add, remove, reorder, resize, or create
+named dashboards without editing the application shell.
+
+The modular widgets now cover market regime and controls, cross-asset conditions,
+regional benchmark comparison, linked sector/industry rotation, multi-horizon
+liquidity and breadth, profile-driven stock ranking, and generic stock/ETF/index
+analysis. See
+[docs/widget-architecture.md](docs/widget-architecture.md) for the widget
+contract, configuration fields, and migration roadmap.
+
 ## Data Cache
 
 Stockfinder persists last-known-good daily histories, completed scans, watchlists,
@@ -164,6 +179,73 @@ Open **Data controls** in the sidebar to manage broad scans:
 
 A completed scan is reused when moving between Market pulse and Rotation
 leaders. Data refreshes automatically each day or when **Refresh now** is used.
+
+## Scheduled Alert Delivery
+
+Portfolio Monitor evaluates end-of-day position and watchlist alerts in the app.
+The optional `stockfinder-alerts` command evaluates the same rules from persistent
+cached data without starting Streamlit. It sends only when the alert set changes,
+and sends one recovery message when previously active alerts clear.
+
+Inspect the current report without sending or changing delivery state:
+
+```bash
+stockfinder-alerts --dry-run --base-currency EUR
+```
+
+SMTP delivery is disabled until these environment variables are supplied:
+
+```bash
+export STOCKFINDER_SMTP_HOST=smtp.example.com
+export STOCKFINDER_SMTP_PORT=587
+export STOCKFINDER_SMTP_STARTTLS=true
+export STOCKFINDER_SMTP_USER=alerts@example.com
+export STOCKFINDER_SMTP_PASSWORD='use-a-secret-manager'
+export STOCKFINDER_ALERT_FROM=alerts@example.com
+export STOCKFINDER_ALERT_TO=investor@example.com
+export STOCKFINDER_ALERT_BASE_CURRENCY=EUR
+stockfinder-alerts
+```
+
+Do not store SMTP passwords in repository files. Schedule the command with the
+deployment platform, `cron`, or a systemd timer after the daily market scan has
+completed. For example, a weekday cron entry can invoke an environment-loading
+wrapper at 22:00:
+
+```text
+0 22 * * 1-5 /path/to/private/run-stockfinder-alerts
+```
+
+The command does not fetch providers. It uses the latest completed scan, local
+portfolio/watchlist records, and cached FX histories. Missing scan, quote, or FX
+evidence is reported and cannot trigger the corresponding condition. Delivery
+state is stored atomically in `data/alert-delivery.json` (or the configured
+`STOCKFINDER_DATA_DIR`).
+
+## Backup And Restore
+
+Create a checksum-verified archive of the complete persistent data directory. The
+archive must be outside `STOCKFINDER_DATA_DIR` so it cannot include itself.
+SQLite state is captured through SQLite's online backup API so an active
+application cannot produce a partially copied database:
+
+```bash
+stockfinder-backup create ~/Backups/stockfinder-$(date +%F).zip
+stockfinder-backup verify ~/Backups/stockfinder-2026-09-20.zip
+```
+
+Restore only into a new or empty directory. The command validates every recorded
+file size and SHA-256 checksum and rejects unsafe archive paths before writing:
+
+```bash
+stockfinder-backup restore \
+	~/Backups/stockfinder-2026-09-20.zip \
+	~/Restores/stockfinder-2026-09-20
+```
+
+Inspect the restored directory before switching `STOCKFINDER_DATA_DIR` to it.
+Restore intentionally refuses to overwrite a populated directory. This preserves
+the current data set until the restored copy has been verified independently.
 
 ## Long Swing Rule
 

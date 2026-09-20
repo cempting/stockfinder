@@ -11,6 +11,43 @@ from stockfinder.runtime import application_data_dir
 DEFAULT_CONFIG_PATH = Path(__file__).with_name("default_analysis_config.json")
 GEOGRAPHY_DIMENSIONS = ("listing_region", "company_domicile")
 REQUIRED_MARKET_REGIMES = ("defensive", "neutral", "supportive")
+DEFAULT_ALERT_RULES = {
+    "max_position_allocation_pct": 25.0,
+    "minimum_position_safety": 40.0,
+    "position_loss_pct": 10.0,
+    "watchlist_entry_tolerance_pct": 2.0,
+}
+DEFAULT_PROFILE_COMPOSITION = {
+    "weighted_score_enabled": False,
+    "minimum_weighted_score": 60.0,
+    "setup_weight": 40.0,
+    "safety_weight": 25.0,
+    "fundamental_weight": 20.0,
+    "trend_weight": 15.0,
+}
+PROFILE_COMPOSITION_PRESETS = {
+    "Momentum-led": {
+        "minimum_weighted_score": 65.0,
+        "setup_weight": 50.0,
+        "safety_weight": 15.0,
+        "fundamental_weight": 10.0,
+        "trend_weight": 25.0,
+    },
+    "Balanced": {
+        "minimum_weighted_score": 65.0,
+        "setup_weight": 35.0,
+        "safety_weight": 25.0,
+        "fundamental_weight": 25.0,
+        "trend_weight": 15.0,
+    },
+    "Quality-first": {
+        "minimum_weighted_score": 70.0,
+        "setup_weight": 20.0,
+        "safety_weight": 25.0,
+        "fundamental_weight": 40.0,
+        "trend_weight": 15.0,
+    },
+}
 
 
 def default_analysis_config() -> dict[str, Any]:
@@ -62,6 +99,41 @@ def validate_analysis_config(config: dict[str, Any]) -> None:
                 raise ValueError(
                     f"rule_profiles.{name}.{field} must be between 0 and 100"
                 )
+        composition = configured_rule_profile(profile)
+        if not isinstance(composition["weighted_score_enabled"], bool):
+            raise ValueError(
+                f"rule_profiles.{name}.weighted_score_enabled must be boolean"
+            )
+        for field in (
+            "minimum_weighted_score",
+            "setup_weight",
+            "safety_weight",
+            "fundamental_weight",
+            "trend_weight",
+        ):
+            value = composition[field]
+            if not isinstance(value, (int, float)) or not 0 <= value <= 100:
+                raise ValueError(
+                    f"rule_profiles.{name}.{field} must be between 0 and 100"
+                )
+        if not any(
+            composition[field] > 0
+            for field in (
+                "setup_weight",
+                "safety_weight",
+                "fundamental_weight",
+                "trend_weight",
+            )
+        ):
+            raise ValueError(f"rule_profiles.{name} needs at least one positive weight")
+
+    alert_rules = config.get("alert_rules", DEFAULT_ALERT_RULES)
+    if not isinstance(alert_rules, dict):
+        raise ValueError("alert_rules must be an object")
+    for field in DEFAULT_ALERT_RULES:
+        value = alert_rules.get(field)
+        if not isinstance(value, (int, float)) or not 0 <= value <= 100:
+            raise ValueError(f"alert_rules.{field} must be between 0 and 100")
 
     proxies = config.get("regional_proxies")
     if not isinstance(proxies, dict) or not proxies:
@@ -128,6 +200,63 @@ def geography_column(config: dict[str, Any]) -> str:
         if config.get("geography_dimension") == "company_domicile"
         else "Region"
     )
+
+
+def update_rule_profile(
+    config: dict[str, Any],
+    profile_name: str,
+    values: dict[str, Any],
+) -> dict[str, Any]:
+    """Return a validated configuration with one rule profile updated."""
+    candidate = deepcopy(config)
+    if profile_name not in candidate.get("rule_profiles", {}):
+        raise ValueError(f"Unknown rule profile: {profile_name}")
+    candidate["rule_profiles"][profile_name].update(values)
+    validate_analysis_config(candidate)
+    return candidate
+
+
+def configured_rule_profile(profile: dict[str, Any]) -> dict[str, Any]:
+    """Return a profile with defaults for optional weighted composition fields."""
+    return {**DEFAULT_PROFILE_COMPOSITION, **profile}
+
+
+def apply_profile_composition_preset(
+    config: dict[str, Any],
+    profile_name: str,
+    preset_name: str,
+) -> dict[str, Any]:
+    """Enable and apply one validated weighted-composition preset."""
+    if preset_name not in PROFILE_COMPOSITION_PRESETS:
+        raise ValueError(f"Unknown composition preset: {preset_name}")
+    return update_rule_profile(
+        config,
+        profile_name,
+        {
+            "weighted_score_enabled": True,
+            **PROFILE_COMPOSITION_PRESETS[preset_name],
+        },
+    )
+
+
+def configured_alert_rules(config: dict[str, Any]) -> dict[str, float]:
+    """Return alert rules with defaults for configurations saved before alerts."""
+    configured = config.get("alert_rules", {})
+    return {
+        field: float(configured.get(field, default))
+        for field, default in DEFAULT_ALERT_RULES.items()
+    }
+
+
+def update_alert_rules(
+    config: dict[str, Any], values: dict[str, float]
+) -> dict[str, Any]:
+    """Return a validated configuration with alert thresholds updated."""
+    candidate = deepcopy(config)
+    candidate["alert_rules"] = configured_alert_rules(candidate)
+    candidate["alert_rules"].update(values)
+    validate_analysis_config(candidate)
+    return candidate
 
 
 def configured_proxy(

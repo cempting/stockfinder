@@ -18,27 +18,51 @@
       "new_entry_policy": "Entries allowed when the active rule profile passes"
     }
   },
+  "alert_rules": {
+    "max_position_allocation_pct": 25,
+    "minimum_position_safety": 40,
+    "position_loss_pct": 10,
+    "watchlist_entry_tolerance_pct": 2
+  },
   "rule_profiles": {
     "Swing": {
       "minimum_setup_score": 70,
       "maximum_volatility_pct": 100,
       "minimum_safety_score": 20,
       "minimum_fundamental_score": 65,
-      "require_above_sma150": false
+      "require_above_sma150": false,
+      "weighted_score_enabled": false,
+      "minimum_weighted_score": 65,
+      "setup_weight": 45,
+      "safety_weight": 20,
+      "fundamental_weight": 15,
+      "trend_weight": 20
     },
     "Position": {
       "minimum_setup_score": 65,
       "maximum_volatility_pct": 70,
       "minimum_safety_score": 40,
       "minimum_fundamental_score": 70,
-      "require_above_sma150": true
+      "require_above_sma150": true,
+      "weighted_score_enabled": false,
+      "minimum_weighted_score": 65,
+      "setup_weight": 30,
+      "safety_weight": 25,
+      "fundamental_weight": 25,
+      "trend_weight": 20
     },
     "Investing": {
       "minimum_setup_score": 55,
       "maximum_volatility_pct": 50,
       "minimum_safety_score": 55,
       "minimum_fundamental_score": 75,
-      "require_above_sma150": true
+      "require_above_sma150": true,
+      "weighted_score_enabled": false,
+      "minimum_weighted_score": 70,
+      "setup_weight": 20,
+      "safety_weight": 30,
+      "fundamental_weight": 35,
+      "trend_weight": 15
     }
   },
   "regional_proxies": {

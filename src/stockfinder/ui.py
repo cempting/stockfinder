@@ -29,6 +29,9 @@ from stockfinder.config import (
     configured_proxy,
     geography_column,
 )
+from stockfinder.dashboard import load_application_dashboards
+from stockfinder.dashboard_renderer import render_dashboard
+from stockfinder.dashboard_runtime import DashboardServices
 from stockfinder.data import (
     METAL_PROXIES,
     METALS_BENCHMARK,
@@ -44,6 +47,7 @@ from stockfinder.data import (
     get_profile,
 )
 from stockfinder.models import Score, SwingSetup
+from stockfinder.navigation import AnalysisContext
 from stockfinder.runtime import application_data_dir
 from stockfinder.scoring import score_fundamentals
 from stockfinder.storage import (
@@ -52,27 +56,28 @@ from stockfinder.storage import (
     ScanSnapshot,
     ScanSnapshotStore,
 )
+from stockfinder.widgets import built_in_widget_registry
 
 MARKET_SCAN_VERSION = "2026-09-promising-evidence-v12"
 WORKSPACE_PAGES = (
+    "Command center",
     "Market pulse",
     "Rotation leaders",
     "Metals",
     "Stocks",
-    "Portfolio",
     "Settings",
     "Methodology",
 )
 WORKSPACE_LABELS = {
+    "Command center": "Command Center",
     "Market pulse": "Overview",
     "Rotation leaders": "Industries",
     "Metals": "Metals",
     "Stocks": "Stocks",
-    "Portfolio": "Portfolio",
     "Settings": "Settings",
     "Methodology": "Methodology",
 }
-STOCKS_VIEWS = ("Discover", "Research", "Watchlist")
+STOCKS_VIEWS = ("Discover", "Research")
 
 
 @st.cache_resource
@@ -162,7 +167,9 @@ def main() -> None:
     _consume_pending_navigation(st.session_state)
     page, load_mode = _sidebar()
 
-    if page == "Market pulse":
+    if page == "Command center":
+        _dashboard_page(load_mode)
+    elif page == "Market pulse":
         _market_page(load_mode)
     elif page == "Rotation leaders":
         _sector_page(load_mode)
@@ -170,8 +177,6 @@ def main() -> None:
         _metals_page()
     elif page == "Stocks":
         _stocks_page(load_mode)
-    elif page == "Portfolio":
-        _portfolio_page()
     elif page == "Settings":
         _settings_page()
     else:
@@ -194,7 +199,7 @@ def _sidebar() -> tuple[str, str]:
         st.markdown('<div class="brand">STOCKFINDER</div>', unsafe_allow_html=True)
         st.caption("Evidence-led market research")
         if st.session_state.get("workspace_page") not in WORKSPACE_PAGES:
-            st.session_state["workspace_page"] = "Market pulse"
+            st.session_state["workspace_page"] = "Command center"
         page = st.radio(
             "Navigate",
             WORKSPACE_PAGES,
@@ -272,6 +277,48 @@ def _sidebar() -> tuple[str, str]:
                 st.rerun()
         st.caption("Daily data · refreshed after market close")
     return page, "extended" if extended else "standard"
+
+
+def _dashboard_page(load_mode: str) -> None:
+    dashboards = load_application_dashboards()
+    registry = built_in_widget_registry()
+    registry.validate(dashboards)
+    dashboard_names = {dashboard.title: dashboard for dashboard in dashboards}
+
+    _heading("Command center", "Configurable, linked market-analysis widgets")
+    selected_name = st.selectbox(
+        "Dashboard",
+        tuple(dashboard_names),
+        key="active_dashboard",
+    )
+    dashboard = dashboard_names[selected_name]
+    context = AnalysisContext(st.session_state)
+    if context.breadcrumb() and st.button("Clear analysis context"):
+        context.select("region", None)
+        st.rerun()
+    services = DashboardServices(
+        get_history=get_history,
+        analyze_security=cached_analysis,
+        load_scan=_load_scan,
+        get_analysis_config=analysis_config_store().load,
+        save_analysis_config=analysis_config_store().save,
+        get_broker_symbols=lambda: set(
+            gettex_instrument_store().load()["Symbol"].astype(str)
+        ),
+        get_risk_profiles=_cached_risk_profiles,
+        get_candidate_fundamentals=cached_candidate_fundamentals,
+        get_positions=repository().positions,
+        get_watchlist=repository().watchlist,
+        save_position=repository().save_position,
+        delete_position=repository().delete_position,
+        save_watchlist=repository().save_watchlist,
+        delete_watchlist=repository().delete_watchlist,
+        get_active_rule_profile=lambda: str(
+            st.session_state.get("active_rule_profile", "Swing")
+        ),
+        load_mode=load_mode,
+    )
+    render_dashboard(dashboard, registry, context, services)
 
 
 def _metals_page() -> None:
@@ -507,8 +554,6 @@ def _stocks_page(load_mode: str) -> None:
     )
     if view == "Research":
         _research_page()
-    elif view == "Watchlist":
-        _watchlist_page()
     else:
         _stocks_discovery_page(load_mode)
 
@@ -1048,24 +1093,6 @@ def _cached_risk_profiles() -> pd.DataFrame:
         return pd.DataFrame()
     st.session_state["scan_risk_profiles"] = snapshot.risk_profiles
     return snapshot.risk_profiles
-
-
-def _enrich_with_cached_risk(frame: pd.DataFrame) -> pd.DataFrame:
-    profiles = _cached_risk_profiles().rename(
-        columns={
-            "Symbol": "symbol",
-            "Last price": "last_price",
-            "Market risk": "market_risk",
-            "Risk label": "risk_label",
-            "ATR %": "atr_%",
-        }
-    )
-    columns = ["symbol", "last_price", "market_risk", "risk_label", "atr_%"]
-    if "symbol" not in profiles:
-        profiles = pd.DataFrame(columns=columns)
-    else:
-        profiles = profiles.reindex(columns=columns)
-    return frame.merge(profiles, on="symbol", how="left")
 
 
 def _rotation_state_from_row(row: pd.Series) -> str:
@@ -2883,125 +2910,6 @@ def _score_context(value: float, risk: bool = False, concise: bool = False) -> s
         return f"{label} · {display:.1f}/10"
     suffix = "risk" if risk else "evidence"
     return f"{score_name} {display:.1f}/10 · {label.lower()} {suffix}."
-
-
-def _watchlist_page() -> None:
-    _heading(
-        "Watchlist", "Research candidates, planned entries, and invalidation levels"
-    )
-    watchlist = repository().watchlist()
-    if watchlist.empty:
-        st.info("Your watchlist is empty. Add a candidate from Stocks → Research.")
-        return
-    enriched = _enrich_with_cached_risk(watchlist)
-    enriched["upside_%"] = (enriched["target_price"] / enriched["last_price"] - 1) * 100
-    missing = int(enriched["last_price"].isna().sum())
-    st.caption(
-        "Prices and market-risk profiles come from the latest completed broad scan; "
-        "opening this page does not fetch providers."
-    )
-    if missing:
-        st.warning(
-            f"{missing} symbol(s) are outside the cached scan. Use Refresh now in "
-            "Data controls to fetch them as part of a new market scan."
-        )
-    display = _display_score_columns(
-        enriched, risk_columns=("market_risk",)
-    ).rename(columns={"market_risk": "safety", "risk_label": "risk_level"})
-    st.dataframe(
-        display,
-        hide_index=True,
-        width="stretch",
-        column_config={
-            "entry_price": st.column_config.NumberColumn("Entry", format="$%.2f"),
-            "target_price": st.column_config.NumberColumn("Target", format="$%.2f"),
-            "stop_price": st.column_config.NumberColumn("Stop", format="$%.2f"),
-            "last_price": st.column_config.NumberColumn("Last", format="$%.2f"),
-            "upside_%": st.column_config.NumberColumn("Upside", format="%.1f%%"),
-            "safety": st.column_config.ProgressColumn(
-                "Safety", min_value=1, max_value=10, format="%.1f"
-            ),
-            "atr_%": st.column_config.NumberColumn("ATR", format="%.1f%%"),
-        },
-    )
-    st.download_button(
-        "Download CSV",
-        display.to_csv(index=False),
-        "stockfinder-watchlist.csv",
-        "text/csv",
-    )
-    symbol = st.selectbox("Remove candidate", enriched["symbol"].tolist())
-    if st.button("Remove", type="secondary") and symbol:
-        repository().delete_watchlist(symbol)
-        st.rerun()
-
-
-def _portfolio_page() -> None:
-    _heading("Portfolio", "Manual positions, live valuation, and concentration")
-    with st.form("position"):
-        symbol, quantity, entry_price, entry_date = st.columns(4)
-        position_symbol = symbol.text_input("Symbol", "SPY").upper()
-        position_quantity = quantity.number_input("Quantity", min_value=0.01, value=1.0)
-        position_entry = entry_price.number_input(
-            "Entry price", min_value=0.01, value=100.0
-        )
-        position_date = entry_date.date_input("Entry date", value=date.today())
-        if st.form_submit_button("Save position", type="primary"):
-            repository().save_position(
-                position_symbol,
-                position_quantity,
-                position_entry,
-                position_date.isoformat(),
-            )
-            st.rerun()
-
-    positions = repository().positions()
-    if positions.empty:
-        st.info("No positions recorded.")
-        return
-    positions = _enrich_with_cached_risk(positions)
-    missing = int(positions["last_price"].isna().sum())
-    st.caption(
-        "Valuation and market risk use the latest completed broad scan without "
-        "fetching complete company research."
-    )
-    if missing:
-        st.warning(
-            f"{missing} position(s) have no cached market profile. Use Refresh now "
-            "in Data controls to rebuild the market cache."
-        )
-    positions["market_value"] = positions["quantity"] * positions["last_price"]
-    positions["cost"] = positions["quantity"] * positions["entry_price"]
-    positions["pnl"] = positions["market_value"] - positions["cost"]
-    positions["allocation_%"] = (
-        positions["market_value"] / positions["market_value"].sum() * 100
-    )
-    total, pnl, concentration = st.columns(3)
-    total.metric("Market value", f"${positions['market_value'].sum():,.2f}")
-    pnl.metric("Unrealized P&L", f"${positions['pnl'].sum():,.2f}")
-    concentration.metric("Largest position", f"{positions['allocation_%'].max():.1f}%")
-    left, right = st.columns([2, 1])
-    positions_display = _display_score_columns(
-        positions, risk_columns=("market_risk",)
-    ).rename(columns={"market_risk": "safety", "risk_label": "risk_level"})
-    left.dataframe(
-        positions_display,
-        hide_index=True,
-        width="stretch",
-        column_config={
-            "safety": st.column_config.ProgressColumn(
-                "Safety", min_value=1, max_value=10, format="%.1f"
-            )
-        },
-    )
-    allocation = px.pie(positions, values="market_value", names="symbol", hole=0.55)
-    allocation.update_traces(textposition="inside", textinfo="label+percent")
-    allocation.update_layout(showlegend=False, height=330)
-    right.plotly_chart(allocation, width="stretch")
-    remove = st.selectbox("Close/remove position", positions["symbol"].tolist())
-    if st.button("Remove position") and remove:
-        repository().delete_position(remove)
-        st.rerun()
 
 
 def _settings_page() -> None:

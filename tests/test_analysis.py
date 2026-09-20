@@ -213,6 +213,19 @@ def test_normalized_performance_aligns_mixed_timezone_histories(monkeypatch) -> 
     assert performance.index.tz is None
 
 
+def test_normalized_performance_from_histories_skips_missing_prices() -> None:
+    dates = pd.bdate_range("2026-01-01", periods=3)
+    performance = analysis.normalized_performance_from_histories(
+        {
+            "VALID": pd.DataFrame({"Close": [10.0, 11.0, 12.0]}, index=dates),
+            "EMPTY": pd.DataFrame(),
+        }
+    )
+
+    assert performance.columns.tolist() == ["VALID"]
+    assert performance.iloc[-1, 0] == 120.0
+
+
 def test_broad_rotation_excludes_downward_industry() -> None:
     dates = pd.bdate_range("2025-01-01", periods=220)
     universe = pd.DataFrame(
@@ -345,6 +358,8 @@ def test_broad_rotation_keeps_same_industry_separate_by_region() -> None:
     assert set(industries["Region"]) == {"United States", "Europe"}
     assert len(industries) == 2
     assert len(sectors) == 2
+    assert set(sectors["Members"]) == {1}
+    assert "Above rising SMA150 %" in sectors
 
 
 @pytest.mark.parametrize(

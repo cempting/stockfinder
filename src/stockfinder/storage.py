@@ -292,11 +292,21 @@ class Repository:
                     symbol TEXT PRIMARY KEY,
                     quantity REAL NOT NULL CHECK (quantity > 0),
                     entry_price REAL NOT NULL CHECK (entry_price > 0),
+                    currency TEXT NOT NULL DEFAULT 'USD',
                     entry_date TEXT,
                     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );
                 """
             )
+            position_columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(positions)")
+            }
+            if "currency" not in position_columns:
+                connection.execute(
+                    "ALTER TABLE positions ADD COLUMN currency TEXT NOT NULL "
+                    "DEFAULT 'USD'"
+                )
             connection.commit()
 
     def save_watchlist(
@@ -336,20 +346,27 @@ class Repository:
             )
 
     def save_position(
-        self, symbol: str, quantity: float, entry_price: float, entry_date: str
+        self,
+        symbol: str,
+        quantity: float,
+        entry_price: float,
+        entry_date: str,
+        currency: str = "USD",
     ) -> None:
         with closing(self._connect()) as connection:
             connection.execute(
                 """
-                INSERT INTO positions (symbol, quantity, entry_price, entry_date)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO positions
+                    (symbol, quantity, entry_price, entry_date, currency)
+                VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT(symbol) DO UPDATE SET
                     quantity = excluded.quantity,
                     entry_price = excluded.entry_price,
                     entry_date = excluded.entry_date,
+                    currency = excluded.currency,
                     updated_at = CURRENT_TIMESTAMP
                 """,
-                (symbol.upper(), quantity, entry_price, entry_date),
+                (symbol.upper(), quantity, entry_price, entry_date, currency.upper()),
             )
             connection.commit()
 

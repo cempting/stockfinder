@@ -657,19 +657,29 @@ def broad_rotation_scan(
     if industries.empty:
         return pd.DataFrame(), industries
     industries = industries.sort_values("Rotation score", ascending=False)
+    sector_input = industries.assign(
+        _breadth_members=(
+            industries["Above rising SMA150 %"] * industries["Members"]
+        )
+    )
     sectors = (
-        industries.groupby(["Region", "Sector"], as_index=False)
+        sector_input.groupby(["Region", "Sector"], as_index=False)
         .agg(
             Industries=("Industry", "count"),
+            Members=("Members", "sum"),
             Winners=("Winning", "sum"),
+            _breadth_members=("_breadth_members", "sum"),
             **{
                 "Liquidity composite": ("Liquidity composite", "mean"),
                 "Flow composite %": ("Flow composite %", "mean"),
                 "Rotation score": ("Rotation score", "mean"),
             },
         )
-        .sort_values("Rotation score", ascending=False)
     )
+    sectors["Above rising SMA150 %"] = (
+        sectors.pop("_breadth_members") / sectors["Members"]
+    ).round(1)
+    sectors = sectors.sort_values("Rotation score", ascending=False)
     return sectors, industries
 
 
@@ -998,9 +1008,21 @@ def _is_above_rising_sma150(history: pd.DataFrame) -> bool:
 
 def normalized_performance(symbols: list[str], period: str = "6mo") -> pd.DataFrame:
     """Return aligned growth-of-100 series for comparison charts."""
+    histories = {symbol: get_history(symbol, period).data for symbol in symbols}
+    return normalized_performance_from_histories(histories)
+
+
+def normalized_performance_from_histories(
+    histories: Mapping[str, pd.DataFrame],
+) -> pd.DataFrame:
+    """Return aligned growth-of-100 series from already loaded histories."""
     series = {}
-    for symbol in symbols:
-        close = get_history(symbol, period).data["Close"].copy()
+    for symbol, history in histories.items():
+        if history.empty or "Close" not in history:
+            continue
+        close = history["Close"].dropna().copy()
+        if close.empty:
+            continue
         if isinstance(close.index, pd.DatetimeIndex):
             close.index = close.index.tz_localize(None).normalize()
         series[symbol] = close / close.iloc[0] * 100
