@@ -18,6 +18,7 @@ class DashboardServices:
     """Explicit service boundary between widgets and the application shell."""
 
     get_history: Callable[[str, str], DataResult]
+    refresh_history: Callable[[str, str], DataResult]
     analyze_security: Callable[[str], AnalysisResult]
     load_scan: Callable[[str], ScanResult]
     get_previous_scan: Callable[[], PreviousScanResult]

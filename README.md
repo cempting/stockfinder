@@ -81,6 +81,37 @@ retried with smaller batches; unresolved symbols use last-known real data when
 available. Synthetic data is reserved for symbols with no cached or provider
 data.
 
+The cache behaves the same in a local virtual environment and a hosted
+Streamlit process. Point `STOCKFINDER_DATA_DIR` at a writable persistent or
+mounted directory in either environment; otherwise the app uses the repository
+`data/` directory and falls back to the system temporary directory only when it
+is not writable. A normal read uses memory and then Parquet history files before
+contacting the provider. **Refresh selected chart** updates only the selected
+industry proxy or stock. **Refresh now** incrementally updates every cached scan
+symbol, fetches full history for every cache miss, and rebuilds the scan. On
+ephemeral hosts such as Streamlit Community Cloud, files survive reruns but may
+be lost when the app is rebooted or redeployed; the next scan then refetches all
+missing history automatically.
+
+## Market Source Configuration
+
+Reviewable global and regional benchmark, sector, and dedicated industry ETF/index
+sources live in
+`src/stockfinder/infrastructure/default_market_sources.json`. To override them
+without changing application code, create `market_sources.json` under
+`STOCKFINDER_DATA_DIR` with the same structure and restart the app. Every entry
+declares a `symbol` and `kind` (`ETF` or `Index`). Dedicated industry symbols
+must be unique so one instrument cannot silently stand in for several industries.
+
+The v2 catalog has one `global` block and a `regions.<region>` block for each
+market. Resolution prefers a regional industry source, then a global industry
+source, regional sector source, and regional benchmark. Flow Finder renders a
+chart only when a dedicated industry source is configured; otherwise it keeps
+the aggregate industry scores visible and labels the chart as needing proxy
+review. `analysis_config.json` contains strategy settings only and no longer
+duplicates market symbols. Existing v1 source files and legacy analysis settings
+are migrated when loaded.
+
 ## Broker Tradability
 
 Broker availability is separate from the exchange used for market data. Import a
@@ -201,7 +232,10 @@ not exhaustive, and instrument availability depends on the user's broker.
 Open **Data controls** in the sidebar to manage broad scans:
 
 - **Refresh now** clears provider and processed-scan caches, reloads exchange
-	membership and price history, and rebuilds all rotation results.
+	membership, incrementally updates cached price history, fetches full history
+	for cache misses, and rebuilds all rotation results.
+- **Refresh selected chart** in Flow Finder bypasses freshness for the selected
+	industry proxy or stock and atomically updates that symbol's history file.
 - **Extended loading** requests two years of history in 100-symbol batches.
 	Standard mode requests one year in 200-symbol batches.
 - The scan status shows membership retrieval, exact processed and usable symbol

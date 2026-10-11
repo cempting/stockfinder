@@ -11,7 +11,10 @@ from stockfinder.presentation.navigation import AnalysisContext
 from stockfinder.presentation.widget_registry import WidgetRegistry
 from stockfinder.widgets import built_in_widget_registry
 from stockfinder.widgets.capital_flow_workspace import (
+    CHART_PERIODS,
+    _flow_chart,
     filter_flow_evidence,
+    industry_score_fields,
     order_flow_evidence,
 )
 from stockfinder.widgets.instrument_analysis import _instrument_figure
@@ -240,6 +243,55 @@ def test_flow_workspace_filters_direction_and_patterns() -> None:
 
     assert filtered["Industry"].tolist() == ["Breakout"]
     assert outflows["Industry"].tolist() == ["Weak"]
+
+
+def test_industry_overview_formats_scores_beside_charts() -> None:
+    import pandas as pd
+
+    fields = industry_score_fields(
+        pd.Series(
+            {
+                "Movement flow %": 12.34,
+                "Movement liquidity": 76.0,
+                "Rotation score": 68.0,
+                "Above rising SMA150 %": 55.0,
+                "Pattern volume ratio": 1.75,
+            }
+        )
+    )
+
+    assert fields == {
+        "Flow": "+12.3%",
+        "Liquidity": "7.6/10",
+        "Trend": "6.8/10",
+        "Breadth": "55%",
+        "Volume": "1.8x",
+    }
+
+
+def test_flow_workspace_chart_ranges_map_to_live_history_periods() -> None:
+    assert CHART_PERIODS == {
+        "1W": "5d",
+        "1M": "1mo",
+        "3M": "3mo",
+        "6M": "6mo",
+        "1Y": "1y",
+        "2Y": "2y",
+    }
+
+
+def test_flow_workspace_stock_chart_keeps_two_year_history() -> None:
+    import pandas as pd
+
+    dates = pd.bdate_range("2024-01-01", periods=528)
+    history = pd.DataFrame(
+        {"Close": range(100, 628), "Volume": range(1_000, 1_528)},
+        index=dates,
+    )
+
+    figure = _flow_chart(history, "TEST")
+
+    assert len(figure.data[0].x) == 528
 
 
 def test_capital_movement_state_filter_preserves_unknown_legacy_data() -> None:

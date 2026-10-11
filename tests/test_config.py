@@ -8,7 +8,6 @@ from stockfinder.infrastructure.config import (
     capital_movement_sessions,
     configured_alert_rules,
     configured_capital_movement,
-    configured_proxy,
     configured_rule_profile,
     default_analysis_config,
     geography_column,
@@ -42,6 +41,9 @@ def test_legacy_config_migrates_to_daily_capital_movement(tmp_path) -> None:
     store = AnalysisConfigStore(tmp_path / "analysis.json")
     legacy = default_analysis_config()
     legacy.pop("capital_movement")
+    legacy["regional_proxies"] = {
+        "Global": {"benchmark": "ACWI", "sectors": {}, "industries": {}}
+    }
     legacy["rule_profiles"]["Swing"]["minimum_setup_score"] = 77
     store.path.write_text(json.dumps(legacy), encoding="utf-8")
 
@@ -53,6 +55,7 @@ def test_legacy_config_migrates_to_daily_capital_movement(tmp_path) -> None:
     }
     assert capital_movement_sessions(loaded) == 1
     assert loaded["rule_profiles"]["Swing"]["minimum_setup_score"] == 77
+    assert "regional_proxies" not in loaded
 
 
 def test_capital_movement_periods_are_resolved_and_validated() -> None:
@@ -165,21 +168,6 @@ def test_alert_rules_are_backward_compatible_and_validated() -> None:
 
     with pytest.raises(ValueError, match="position_loss_pct"):
         update_alert_rules(config, {"position_loss_pct": 101.0})
-
-
-def test_configured_proxy_prefers_industry_then_sector_then_region() -> None:
-    config = default_analysis_config()
-
-    assert configured_proxy(
-        config, "United States", "Information Technology", "Semiconductors"
-    ) == ("SMH", "regional industry proxy")
-    assert configured_proxy(
-        config, "United States", "Information Technology", "Unknown"
-    ) == ("XLK", "regional sector proxy")
-    assert configured_proxy(config, "Europe", "Industrials", "Machinery") == (
-        "VGK",
-        "regional benchmark fallback",
-    )
 
 
 def test_packaged_default_is_valid_json() -> None:

@@ -2,7 +2,7 @@
 
 Last updated: 2026-10-11  
 Working branch: `dsl`  
-Baseline validation: 183 tests passing, Ruff clean, desktop/mobile visual check
+Baseline validation: 193 tests passing, Ruff clean, desktop/mobile visual check
 
 This is the living implementation status for the spec-driven redesign. Update it
 in the same change that advances a requirement, changes its scope, or discovers
@@ -34,7 +34,7 @@ a blocker.
 | ID | Requirement | Status | Current evidence | Gap to specification |
 | --- | --- | --- | --- | --- |
 | CAP-01 | Curated regional market context | Partial | Regional proxies and a Regional Markets widget exist. | Curated US, broad Europe, Japan, China/Hong Kong, South Korea, Taiwan, and broad Asia coverage must be reviewed and completed with explicit local benchmarks. |
-| CAP-02 | Industry-first opportunity scan | Implemented | Capital Allocation is now one split Flow Finder: direction, region, optional sector, shared pattern filters, industry, profile, and stock selection stay on the left; ranked evidence and charts stay on the right. Sector remains an optional refinement. | Full industry qualification evidence is tracked under CAP-09. |
+| CAP-02 | Industry-first opportunity scan | Implemented | Capital Allocation is now one split Flow Finder: direction, region, optional sector, shared pattern filters, industry, profile, stock selection, and 1W-2Y chart range stay on the left. The right side renders every filtered industry with aligned flow, liquidity, trend, breadth, and volume scores. Charts include price, SMA50, and volume only when a unique dedicated industry ETF/index is configured; stock drilldown retains the same filters. | Full industry qualification evidence is tracked under CAP-09. Dedicated proxy coverage remains intentionally incomplete until mappings are reviewed. |
 | CAP-03 | Adjustable capital-movement period | Validated | Daily (`1s`) is the backward-compatible default; Weekly (`5s`), Monthly (`21s`), and custom sessions flow through validated config, industry and stock calculations, cache identity, controls, rankings, and evidence tables. | Historical multi-horizon rotation remains separate by design. |
 | CAP-04 | Direct versus inferred capital evidence | Partial | Price-volume inference is labeled separately. Typed contracts and schema-correct unavailable results exist for fund flows, filings, insider, options, block, news, and social evidence. | Real adapters remain optional external dependencies; unavailable evidence is never fabricated. |
 | CAP-05 | Change-first scan experience | Implemented | The prior successful compatible scan is retained. Industry movement and stock qualification transitions label new, strengthening, deteriorating, stable, and unavailable states before current leaders. | Materiality thresholds can be refined after historical validation. |
@@ -51,6 +51,7 @@ a blocker.
 | CAP-16 | Configurable news and social ranking | Partial | Typed news and social contracts exist with explicit unavailable fallback; social requires platform, breadth, attention, and entity-resolution evidence. | No signal can affect ranking until a provider and validation decision are configured. |
 | CAP-17 | Validated editable Swing/Position presets | Partial | Editable Swing and Position rule profiles exist. | Add historical, as-known-then validation reports and visibly mark overrides from validated defaults. |
 | CAP-18 | Weakening and avoidance scan | Implemented | The Flow Finder applies the same period, geography, and pattern workflow symmetrically to explicit Inflow and Outflow industry and stock states. | Predictive short-selling or trade recommendations remain out of scope. |
+| CAP-19 | Reviewable market sources and caching | Validated | One validated v2 JSON catalog owns the global benchmark, regional benchmarks, regional sector sources, and regional/global industry ETF/index sources, with a `STOCKFINDER_DATA_DIR` override and v1 migration. Strategy configuration no longer duplicates market symbols. Persistent Parquet history is reused locally and on hosted Streamlit; selected-chart refresh updates one symbol, full refresh updates cached symbols incrementally, and cache misses fetch full history. | Hosted files remain ephemeral unless the platform provides a mounted persistent volume. Additional regional sector and industry mappings require instrument-by-instrument review. |
 
 ## First Implementation Slice
 
@@ -64,7 +65,7 @@ period while retaining cached-scan correctness.
 | 3 | Include movement settings in scan identity and snapshot metadata | Validated | Period and effective sessions participate in cache identity; incompatible snapshots are not reused. |
 | 4 | Add one shared period control to the industry-first workflow | Validated | Daily is selected by default; industry and stock views share the persisted scan setting. |
 | 5 | Reorder the command center around changed industries and linked constituents | Validated | Prior-scan transitions, changed industries, optional sector refinement, and linked stock qualification changes precede instrument detail. |
-| 6 | Add focused config, analysis, scan, and widget tests | Validated | The suite now contains 183 passing tests, including split-view flow filtering, transitions, setup activation, capped opportunity ranking, industry explainability, peer differences, immutable snapshots, DSL validation, provider fallback, scoreboard coverage, and legacy snapshot compatibility. |
+| 6 | Add focused config, analysis, scan, and widget tests | Validated | The suite now contains 193 passing tests, including split-view flow filtering, chart ranges and volume thumbnails, persistent and focused cache refresh, regional market-source validation and migration, transitions, setup activation, capped opportunity ranking, industry explainability, peer differences, immutable snapshots, DSL validation, provider fallback, scoreboard coverage, and legacy snapshot compatibility. |
 | 7 | Run full automated and visual acceptance validation | Validated | Pytest and Ruff pass; the real 6,104-symbol refresh rendered on desktop and mobile without horizontal overflow. |
 
 ## Known Decisions Needed Later

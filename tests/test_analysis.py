@@ -115,7 +115,9 @@ def test_sector_rotation_exposes_six_month_liquidity(monkeypatch) -> None:
         np.linspace(1_000_000, 2_000_000, 180),
     )
 
-    monkeypatch.setattr(analysis, "SECTOR_ETFS", {"Test sector": "TEST"})
+    monkeypatch.setattr(
+        analysis, "sector_proxy_symbols", lambda: {"Test sector": "TEST"}
+    )
     monkeypatch.setattr(
         analysis,
         "get_history",
@@ -160,7 +162,9 @@ def test_industry_rotation_ranks_stronger_industry_first(monkeypatch) -> None:
     }
 
     monkeypatch.setattr(analysis, "SECURITY_UNIVERSE", universe)
-    monkeypatch.setattr(analysis, "SECTOR_ETFS", {"Test sector": "SECTOR"})
+    monkeypatch.setattr(
+        analysis, "sector_proxy_symbols", lambda: {"Test sector": "SECTOR"}
+    )
     monkeypatch.setattr(
         analysis,
         "get_history",

@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from stockfinder.analysis import normalized_performance_from_histories
-from stockfinder.infrastructure.config import configured_proxy
+from stockfinder.infrastructure.market_sources import resolve_market_proxy
 from stockfinder.presentation.charting import (
     add_relative_volume_lines,
     price_volume_subplots,
@@ -111,8 +111,7 @@ def render_peer_comparison(
         st.info(f"{symbol} is outside the latest classified stock universe.")
         return
 
-    benchmark, benchmark_role = configured_proxy(
-        services.get_analysis_config(),
+    benchmark, benchmark_role = resolve_market_proxy(
         attributes["region"],
         attributes["sector"],
         attributes["industry"],

@@ -4,6 +4,7 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
+from stockfinder.infrastructure.market_sources import regional_benchmark_symbols
 from stockfinder.market_overview import (
     regional_confirmation_snapshot,
     regional_market_snapshot,
@@ -19,11 +20,7 @@ def render_regional_markets(
     context: AnalysisContext,
     services: DashboardServices,
 ) -> None:
-    config = services.get_analysis_config()
-    region_symbols = {
-        region: str(mapping["benchmark"])
-        for region, mapping in config["regional_proxies"].items()
-    }
+    region_symbols = regional_benchmark_symbols()
     histories = {
         symbol: services.get_history(symbol, "1y").data
         for symbol in set(region_symbols.values())

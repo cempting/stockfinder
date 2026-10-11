@@ -190,20 +190,13 @@ def validate_analysis_config(config: dict[str, Any]) -> None:
         if not isinstance(value, (int, float)) or not 0 <= value <= 100:
             raise ValueError(f"alert_rules.{field} must be between 0 and 100")
 
-    proxies = config.get("regional_proxies")
-    if not isinstance(proxies, dict) or not proxies:
-        raise ValueError("regional_proxies must contain at least one region")
-    for region, mapping in proxies.items():
-        if not isinstance(mapping, dict) or not str(mapping.get("benchmark", "")):
-            raise ValueError(
-                f"regional_proxies.{region}.benchmark must be a ticker symbol"
-            )
-        if not isinstance(mapping.get("sectors", {}), dict):
-            raise ValueError(f"regional_proxies.{region}.sectors must be an object")
-        if not isinstance(mapping.get("industries", {}), dict):
-            raise ValueError(
-                f"regional_proxies.{region}.industries must be an object"
-            )
+
+def _migrate_analysis_config(config: dict[str, Any]) -> dict[str, Any]:
+    """Remove source data formerly duplicated in strategy configuration."""
+    migrated = deepcopy(config)
+    migrated.pop("regional_proxies", None)
+    migrated.setdefault("capital_movement", deepcopy(DEFAULT_CAPITAL_MOVEMENT))
+    return migrated
 
 
 class AnalysisConfigStore:
@@ -222,17 +215,14 @@ class AnalysisConfigStore:
             return default_analysis_config()
         try:
             config = json.loads(self.path.read_text(encoding="utf-8"))
-            config.setdefault("capital_movement", deepcopy(DEFAULT_CAPITAL_MOVEMENT))
+            config = _migrate_analysis_config(config)
             validate_analysis_config(config)
             return config
         except (OSError, json.JSONDecodeError, ValueError, TypeError):
             return default_analysis_config()
 
     def save(self, config: dict[str, Any]) -> dict[str, Any]:
-        candidate = deepcopy(config)
-        candidate.setdefault(
-            "capital_movement", deepcopy(DEFAULT_CAPITAL_MOVEMENT)
-        )
+        candidate = _migrate_analysis_config(config)
         validate_analysis_config(candidate)
         temporary = self.path.with_name(f".{self.path.name}.{uuid4().hex}.tmp")
         try:
@@ -345,18 +335,3 @@ def update_alert_rules(
     candidate["alert_rules"].update(values)
     validate_analysis_config(candidate)
     return candidate
-
-
-def configured_proxy(
-    config: dict[str, Any], region: str, sector: str, industry: str
-) -> tuple[str, str]:
-    """Resolve the most specific configured regional analysis proxy."""
-    regions = config["regional_proxies"]
-    mapping = regions.get(region) or regions.get("Global") or {}
-    industry_symbol = mapping.get("industries", {}).get(industry)
-    if industry_symbol:
-        return str(industry_symbol), "regional industry proxy"
-    sector_symbol = mapping.get("sectors", {}).get(sector)
-    if sector_symbol:
-        return str(sector_symbol), "regional sector proxy"
-    return str(mapping.get("benchmark", "ACWI")), "regional benchmark fallback"

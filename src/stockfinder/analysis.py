@@ -7,16 +7,18 @@ import numpy as np
 import pandas as pd
 
 from stockfinder.data import (
-    INDUSTRY_ETFS,
     METAL_PROXIES,
     METALS_BENCHMARK,
-    SECTOR_ETFS,
     SECURITY_UNIVERSE,
     DataResult,
     fundamental_metrics,
     get_history,
     get_profile,
     risk_metrics,
+)
+from stockfinder.infrastructure.market_sources import (
+    industry_proxy_symbols,
+    sector_proxy_symbols,
 )
 from stockfinder.models import MarketRegime, PositionPlan, SecurityAnalysis, SwingSetup
 from stockfinder.scoring import score_fundamentals, score_risk, score_technicals
@@ -123,7 +125,7 @@ def sector_rotation() -> pd.DataFrame:
     """Rank sector proxies across multiple end-of-day horizons."""
     rows = []
     benchmark = get_history("SPY").data["Close"]
-    for sector, symbol in SECTOR_ETFS.items():
+    for sector, symbol in sector_proxy_symbols().items():
         result = get_history(symbol)
         history = result.data
         close = history["Close"]
@@ -272,12 +274,12 @@ def industry_rotation(sector: str) -> pd.DataFrame:
     if members.empty:
         return pd.DataFrame()
 
-    sector_symbol = SECTOR_ETFS.get(sector, "SPY")
+    sector_symbol = sector_proxy_symbols().get(sector, "SPY")
     sector_close = get_history(sector_symbol).data["Close"]
     rows = []
     for industry, industry_members in members.groupby("Industry", sort=False):
         industry = str(industry)
-        proxy_symbol = INDUSTRY_ETFS.get(industry, sector_symbol)
+        proxy_symbol = industry_proxy_symbols().get(industry, sector_symbol)
         proxy_result = get_history(proxy_symbol)
         histories = {
             symbol: get_history(symbol).data

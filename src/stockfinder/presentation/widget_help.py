@@ -87,9 +87,9 @@ subscriptions, futures positioning, or institutional transactions.
     "regional_markets": """
 **Data origin**
 
-Configured regional ETF/index symbols from `regional_proxies`, one year of daily
+Regional ETF/index benchmarks from `market_sources.json`, one year of daily
 history for each benchmark, and industry internals from the latest completed broad
-scan. The configured Global benchmark, normally ACWI, is the relative baseline.
+scan. The catalog's Global benchmark, normally ACWI, is the relative baseline.
 
 **Calculation**
 

@@ -9,17 +9,23 @@ from PIL import Image, ImageDraw
 BACKGROUND = "#151e22"
 PRICE_COLOR = "#49c28a"
 SMA_COLOR = "#f4c95d"
+VOLUME_UP_COLOR = "#28795b"
+VOLUME_DOWN_COLOR = "#9b4d52"
+DIVIDER_COLOR = "#344047"
 
 
 def price_sma_thumbnail(history: pd.DataFrame) -> str:
-    """Render six months of closing price and its 50-day average as a data URL."""
+    """Render the supplied price, SMA50, and volume range as a compact data URL."""
     close = history["Close"].dropna()
     sma50 = close.rolling(50).mean()
-    close = close.tail(126)
     sma50 = sma50.reindex(close.index)
+    volume = history.get("Volume", pd.Series(dtype=float)).reindex(close.index)
 
-    width, height = 260, 74
+    width, height = 260, 112
     padding_x, padding_y = 5, 6
+    volume_height = 32
+    divider_y = height - volume_height - padding_y
+    price_bottom = divider_y - 4
     image = Image.new("RGB", (width, height), BACKGROUND)
     draw = ImageDraw.Draw(image)
     values = pd.concat([close, sma50]).dropna()
@@ -37,9 +43,8 @@ def price_sma_thumbnail(history: pd.DataFrame) -> str:
             (
                 padding_x
                 + position * (width - 2 * padding_x) / max(1, len(close) - 1),
-                height
-                - padding_y
-                - (float(value) - minimum) * (height - 2 * padding_y) / span,
+                price_bottom
+                - (float(value) - minimum) * (price_bottom - padding_y) / span,
             )
             for position, value in zip(positions, valid, strict=True)
         ]
@@ -50,6 +55,27 @@ def price_sma_thumbnail(history: pd.DataFrame) -> str:
         draw.line(price_points, fill=PRICE_COLOR, width=2)
     if len(average_points) > 1:
         draw.line(average_points, fill=SMA_COLOR, width=2)
+    draw.line((padding_x, divider_y, width - padding_x, divider_y), fill=DIVIDER_COLOR)
+
+    valid_volume = volume.dropna()
+    maximum_volume = float(valid_volume.max()) if not valid_volume.empty else 0.0
+    if maximum_volume > 0:
+        bar_width = max(1, (width - 2 * padding_x) // max(1, len(close)))
+        previous_close = close.shift(1)
+        for position, (index, value) in enumerate(volume.items()):
+            if pd.isna(value):
+                continue
+            x = padding_x + position * (width - 2 * padding_x) / max(1, len(close))
+            bar_height = float(value) / maximum_volume * (volume_height - 4)
+            color = (
+                VOLUME_DOWN_COLOR
+                if float(close.loc[index]) < float(previous_close.loc[index])
+                else VOLUME_UP_COLOR
+            )
+            draw.rectangle(
+                (x, height - padding_y - bar_height, x + bar_width, height - padding_y),
+                fill=color,
+            )
     return _data_url(image)
 
 

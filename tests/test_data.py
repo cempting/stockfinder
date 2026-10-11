@@ -2,7 +2,6 @@ import pandas as pd
 
 from stockfinder import data
 from stockfinder.data import (
-    INDUSTRY_ETFS,
     INTERNATIONAL_UNIVERSE,
     SECURITY_UNIVERSE,
     UNIVERSE_NAMES,
@@ -12,10 +11,11 @@ from stockfinder.data import (
     parse_news,
     risk_metrics,
 )
+from stockfinder.infrastructure.market_sources import industry_proxy_symbols
 
 
 def test_every_representative_industry_has_an_etf_proxy() -> None:
-    assert set(SECURITY_UNIVERSE["Industry"]) <= set(INDUSTRY_ETFS)
+    assert set(SECURITY_UNIVERSE["Industry"]) <= set(industry_proxy_symbols())
 
 
 def test_nasdaq_universe_keeps_illiquid_rows_and_maps_sectors() -> None:
@@ -234,6 +234,15 @@ def test_history_validation_rejects_impossible_candles() -> None:
     assert validated.iloc[0]["Close"] == 105.0
 
 
+def test_short_chart_periods_use_period_appropriate_history_limits() -> None:
+    history = pd.DataFrame({"Close": range(100)}, index=pd.RangeIndex(100))
+
+    assert data._minimum_history_rows("5d") == 2
+    assert data._minimum_history_rows("1mo") == 10
+    assert len(data._trim_history(history, "5d")) == 5
+    assert len(data._trim_history(history, "1mo")) == 23
+
+
 def test_batch_history_refresh_uses_incremental_window(monkeypatch, tmp_path) -> None:
     dates = pd.bdate_range("2025-01-01", periods=200)
     cached = pd.DataFrame(
@@ -261,3 +270,92 @@ def test_batch_history_refresh_uses_incremental_window(monkeypatch, tmp_path) ->
 
     assert requested_periods == ["1mo"]
     assert result.data["TEST"]["Close"].iloc[-1] == 302.0
+
+
+def test_forced_batch_refresh_updates_fresh_cached_history(
+    monkeypatch, tmp_path
+) -> None:
+    dates = pd.bdate_range("2025-01-01", periods=200)
+    cache = data.MarketHistoryCache(tmp_path / "market")
+    cache.save(
+        "TEST",
+        pd.DataFrame(
+            {"Close": range(100, 300), "Volume": [1_000] * 200},
+            index=dates,
+        ),
+    )
+    requested_periods = []
+
+    def download(symbols, period, attempts=2):
+        del attempts
+        requested_periods.append(period)
+        update = pd.DataFrame(
+            {"Close": [301.0], "Volume": [1_100]},
+            index=pd.bdate_range(dates[-1] + pd.Timedelta(days=1), periods=1),
+        )
+        return {symbols[0]: update}, [], 0
+
+    monkeypatch.setattr(data, "_market_history_cache", lambda: cache)
+    monkeypatch.setattr(data, "_download_history_chunk", download)
+    data.get_batch_histories.cache_clear()
+
+    result = data.get_batch_histories(("TEST",), "1y", force_refresh=True)
+
+    assert requested_periods == ["1mo"]
+    assert result.data["TEST"].iloc[-1]["Close"] == 301.0
+
+
+def test_batch_history_fetches_full_period_when_cache_is_empty(
+    monkeypatch, tmp_path
+) -> None:
+    cache = data.MarketHistoryCache(tmp_path / "market")
+    requested_periods = []
+    dates = pd.bdate_range("2025-01-01", periods=200)
+
+    def download(symbols, period, attempts=2):
+        del attempts
+        requested_periods.append(period)
+        frame = pd.DataFrame(
+            {"Close": range(100, 300), "Volume": [1_000] * 200},
+            index=dates,
+        )
+        return {symbols[0]: frame}, [], 0
+
+    monkeypatch.setattr(data, "_market_history_cache", lambda: cache)
+    monkeypatch.setattr(data, "_download_history_chunk", download)
+    data.get_batch_histories.cache_clear()
+
+    result = data.get_batch_histories(("TEST",), "1y")
+
+    assert requested_periods == ["1y"]
+    assert len(result.data["TEST"]) == 200
+
+
+def test_focused_history_refresh_updates_persistent_cache(
+    monkeypatch, tmp_path
+) -> None:
+    cache = data.MarketHistoryCache(tmp_path / "market")
+    dates = pd.bdate_range("2026-01-01", periods=5)
+    refreshed = pd.DataFrame(
+        {
+            "Open": range(100, 105),
+            "High": range(102, 107),
+            "Low": range(99, 104),
+            "Close": range(101, 106),
+            "Volume": [1_000] * 5,
+        },
+        index=dates,
+    )
+
+    class TestTicker:
+        def history(self, **kwargs):
+            assert kwargs["period"] == "5d"
+            return refreshed
+
+    monkeypatch.setattr(data, "_market_history_cache", lambda: cache)
+    monkeypatch.setattr(data.yf, "Ticker", lambda symbol: TestTicker())
+
+    result = data.refresh_history("TEST", "5d")
+
+    assert result.source == "Yahoo Finance focused refresh + persistent cache"
+    assert cache.load("TEST").equals(refreshed)

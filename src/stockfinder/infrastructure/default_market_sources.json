@@ -1,0 +1,77 @@
+{
+  "version": 2,
+  "global": {
+    "benchmark": { "symbol": "ACWI", "kind": "ETF" },
+    "industries": {
+      "Aerospace & Defense": { "symbol": "ITA", "kind": "ETF" },
+      "Automobiles": { "symbol": "CARZ", "kind": "ETF" },
+      "Broadline Retail": { "symbol": "XRT", "kind": "ETF" },
+      "Consumer Staples Retail": { "symbol": "RTH", "kind": "ETF" },
+      "Household Products": { "symbol": "RHS", "kind": "ETF" },
+      "Integrated Oil & Gas": { "symbol": "XOP", "kind": "ETF" },
+      "Diversified Banks": { "symbol": "KBE", "kind": "ETF" },
+      "Transaction Processing": { "symbol": "IPAY", "kind": "ETF" },
+      "Pharmaceuticals": { "symbol": "PPH", "kind": "ETF" },
+      "Managed Health Care": { "symbol": "IHF", "kind": "ETF" },
+      "Machinery": { "symbol": "AIRR", "kind": "ETF" },
+      "Semiconductors": { "symbol": "SMH", "kind": "ETF" },
+      "Systems Software": { "symbol": "IGV", "kind": "ETF" },
+      "Technology Hardware": { "symbol": "IYW", "kind": "ETF" },
+      "Industrial Gases": { "symbol": "IYM", "kind": "ETF" },
+      "Copper": { "symbol": "COPX", "kind": "ETF" },
+      "Industrial REITs": { "symbol": "INDS", "kind": "ETF" },
+      "Telecom Tower REITs": { "symbol": "SRVR", "kind": "ETF" },
+      "Electric Utilities": { "symbol": "VPU", "kind": "ETF" },
+      "Internet Content": { "symbol": "FDN", "kind": "ETF" }
+    }
+  },
+  "regions": {
+    "United States": {
+      "benchmark": { "symbol": "SPY", "kind": "ETF" },
+      "sectors": {
+        "Communication Services": { "symbol": "XLC", "kind": "ETF" },
+        "Consumer Discretionary": { "symbol": "XLY", "kind": "ETF" },
+        "Consumer Staples": { "symbol": "XLP", "kind": "ETF" },
+        "Energy": { "symbol": "XLE", "kind": "ETF" },
+        "Financials": { "symbol": "XLF", "kind": "ETF" },
+        "Health Care": { "symbol": "XLV", "kind": "ETF" },
+        "Industrials": { "symbol": "XLI", "kind": "ETF" },
+        "Information Technology": { "symbol": "XLK", "kind": "ETF" },
+        "Materials": { "symbol": "XLB", "kind": "ETF" },
+        "Real Estate": { "symbol": "XLRE", "kind": "ETF" },
+        "Utilities": { "symbol": "XLU", "kind": "ETF" }
+      },
+      "industries": {}
+    },
+    "Europe": {
+      "benchmark": { "symbol": "VGK", "kind": "ETF" },
+      "sectors": {},
+      "industries": {}
+    },
+    "Asia": {
+      "benchmark": { "symbol": "AAXJ", "kind": "ETF" },
+      "sectors": {},
+      "industries": {}
+    },
+    "Asia-Pacific": {
+      "benchmark": { "symbol": "VPL", "kind": "ETF" },
+      "sectors": {},
+      "industries": {}
+    },
+    "Canada": {
+      "benchmark": { "symbol": "EWC", "kind": "ETF" },
+      "sectors": {},
+      "industries": {}
+    },
+    "Latin America": {
+      "benchmark": { "symbol": "ILF", "kind": "ETF" },
+      "sectors": {},
+      "industries": {}
+    },
+    "Africa": {
+      "benchmark": { "symbol": "AFK", "kind": "ETF" },
+      "sectors": {},
+      "industries": {}
+    }
+  }
+}
