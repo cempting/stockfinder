@@ -16,6 +16,7 @@ from stockfinder.widgets.capital_flow_workspace import (
     filter_flow_evidence,
     industry_score_fields,
     order_flow_evidence,
+    stock_score_fields,
 )
 from stockfinder.widgets.instrument_analysis import _instrument_figure
 from stockfinder.widgets.rotation_explorer import (
@@ -266,6 +267,30 @@ def test_industry_overview_formats_scores_beside_charts() -> None:
         "Trend": "6.8/10",
         "Breadth": "55%",
         "Volume": "1.8x",
+    }
+
+
+def test_stock_overview_formats_scores_beside_charts() -> None:
+    import pandas as pd
+
+    fields = stock_score_fields(
+        pd.Series(
+            {
+                "Opportunity score": 82.0,
+                "Movement flow %": 12.34,
+                "Movement liquidity": 76.0,
+                "Stock peer rank": "3/12",
+                "Volume Evidence": True,
+            }
+        )
+    )
+
+    assert fields == {
+        "Score": "8.2/10",
+        "Flow": "+12.3%",
+        "Liquidity": "7.6/10",
+        "Peer": "3/12",
+        "Volume": "Yes",
     }
 
 

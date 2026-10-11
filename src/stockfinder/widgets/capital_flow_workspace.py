@@ -63,6 +63,7 @@ CHART_PERIODS = {
     "1Y": "1y",
     "2Y": "2y",
 }
+STOCKS_PER_PAGE = 10
 
 
 def filter_flow_evidence(
@@ -205,6 +206,7 @@ def render_capital_flow_workspace(
 
         selected_symbol = None
         evaluated = pd.DataFrame()
+        visible_stocks = pd.DataFrame()
         if view == "Stocks":
             st.markdown("**Stock filters**")
             profile_name = st.selectbox(
@@ -230,9 +232,24 @@ def render_capital_flow_workspace(
             if evaluated.empty:
                 st.warning("No stocks match these filters.")
             else:
+                page_count = (len(evaluated) + STOCKS_PER_PAGE - 1) // STOCKS_PER_PAGE
+                stock_page = st.selectbox(
+                    "Stock page",
+                    tuple(range(1, page_count + 1)),
+                    format_func=lambda page: (
+                        f"{(page - 1) * STOCKS_PER_PAGE + 1}-"
+                        f"{min(page * STOCKS_PER_PAGE, len(evaluated))} of "
+                        f"{len(evaluated)}"
+                    ),
+                    key=f"{spec.widget_id}_stock_page",
+                )
+                page_start = (stock_page - 1) * STOCKS_PER_PAGE
+                visible_stocks = evaluated.iloc[
+                    page_start : page_start + STOCKS_PER_PAGE
+                ]
                 selected_symbol = linked_selectbox(
                     "Stock",
-                    evaluated["Symbol"].astype(str).tolist(),
+                    visible_stocks["Symbol"].astype(str).tolist(),
                     "instrument",
                     context,
                     f"{spec.widget_id}_stock",
@@ -258,10 +275,11 @@ def render_capital_flow_workspace(
             )
         elif not evaluated.empty and selected_symbol:
             _render_stock_evidence(
-                evaluated,
+                visible_stocks,
                 selected_symbol,
                 chart_range,
                 services,
+                total_stocks=len(evaluated),
             )
 
 
@@ -349,6 +367,22 @@ def industry_score_fields(row: pd.Series) -> dict[str, str]:
         "Trend": f"{float(row['Rotation score']) / 10:.1f}/10",
         "Breadth": f"{float(row['Above rising SMA150 %']):.0f}%",
         "Volume": f"{float(row['Pattern volume ratio']):.1f}x",
+    }
+
+
+def stock_score_fields(row: pd.Series) -> dict[str, str]:
+    """Format the compact score columns shown beside a stock chart."""
+    volume_evidence = row.get("Volume Evidence")
+    return {
+        "Score": f"{float(row['Opportunity score']) / 10:.1f}/10",
+        "Flow": f"{float(row['Movement flow %']):+.1f}%",
+        "Liquidity": f"{float(row['Movement liquidity']) / 10:.1f}/10",
+        "Peer": str(row["Stock peer rank"]),
+        "Volume": (
+            "Yes"
+            if pd.notna(volume_evidence) and bool(volume_evidence)
+            else "No"
+        ),
     }
 
 
@@ -448,61 +482,77 @@ def _render_stock_evidence(
     symbol: str,
     chart_range: str,
     services: DashboardServices,
+    *,
+    total_stocks: int,
 ) -> None:
-    selected = stocks[stocks["Symbol"].astype(str) == symbol].iloc[0]
-    st.markdown(f"### {selected.get('Company', symbol)} · {symbol}")
-    setup, opportunity, movement, peer = st.columns(4)
-    setup.metric("Setup", str(selected["Setup state"]), str(selected["Profile result"]))
-    opportunity.metric(
-        "Opportunity",
-        f"{float(selected['Opportunity score']) / 10:.1f}/10",
+    st.markdown(f"**Matching stocks · {len(stocks):,} of {total_stocks:,}**")
+    st.caption(
+        f"{chart_range} price, SMA50, and volume · current stock page · "
+        f"selected: {symbol}"
     )
-    movement.metric(
-        "Money flow",
-        str(selected["Movement state"]),
-        f"{float(selected['Movement flow %']):+.1f}%",
-    )
-    peer.metric("Industry rank", str(selected["Stock peer rank"]))
+    histories = {}
     if st.button(
         "Refresh selected chart",
         icon=":material/refresh:",
         key="flow_refresh_selected_stock",
     ):
         history = services.refresh_history(symbol, CHART_PERIODS[chart_range])
+        histories[symbol] = history
         if history.warning:
             st.warning(history.warning)
         else:
             st.success(f"Updated {symbol} and its persistent cache.")
-    else:
-        history = services.get_history(symbol, CHART_PERIODS[chart_range])
-    st.plotly_chart(
-        _flow_chart(history.data, symbol),
-        width="stretch",
-        key=f"flow_stock_{symbol}",
-    )
+
+    prepared = []
+    for _, row in stocks.iterrows():
+        row_symbol = str(row["Symbol"])
+        if row_symbol not in histories:
+            histories[row_symbol] = services.get_history(
+                row_symbol,
+                CHART_PERIODS[chart_range],
+            )
+        prepared.append((row, row_symbol))
+
+    header = st.columns([3.0, 2.3, 1, 1, 1, 1, 1], gap="small")
+    for column, title in zip(
+        header,
+        ("Chart", "Stock", "Score", "Flow", "Liquidity", "Peer", "Volume"),
+        strict=True,
+    ):
+        column.caption(title)
+
+    for position, (row, row_symbol) in enumerate(prepared):
+        chart, identity, *score_columns = st.columns(
+            [3.0, 2.3, 1, 1, 1, 1, 1],
+            gap="small",
+            vertical_alignment="center",
+        )
+        history = histories[row_symbol]
+        chart.image(price_sma_thumbnail(history.data), width="stretch")
+        company_value = row.get("Company")
+        company = (
+            str(company_value)
+            if pd.notna(company_value) and str(company_value)
+            else row_symbol
+        )
+        identity.markdown(f"**{company}**")
+        identity.caption(
+            f"{row_symbol} · {row['Setup state']} · {row['Profile result']}"
+        )
+        for score_column, (score_name, value) in zip(
+            score_columns,
+            stock_score_fields(row).items(),
+            strict=True,
+        ):
+            score_column.markdown(f"**{value}**")
+            if position == 0:
+                score_column.caption(score_name)
+        st.divider()
+
+    sources = sorted({history.source for history in histories.values()})
     st.caption(
-        f"{chart_range} · Source: {history.source} · price and daily volume; "
-        "SMA50 and SMA150 appear when enough history is available"
-    )
-    columns = [
-        "Symbol",
-        "Company",
-        "Profile result",
-        "Opportunity score",
-        "Stock peer rank",
-        "Setup state",
-        "Movement state",
-        "Movement liquidity",
-        "Movement flow %",
-        "Consolidation base",
-        "Price above SMA50",
-        "Price above SMA150",
-        "Volume Evidence",
-    ]
-    st.dataframe(
-        stocks[[column for column in columns if column in stocks]].head(50),
-        hide_index=True,
-        width="stretch",
+        f"Scores use each stock's evaluated setup and price-volume evidence. "
+        f"Sources: {', '.join(sources)}."
     )
 
 
