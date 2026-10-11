@@ -1,11 +1,14 @@
 import json
 
+import pandas as pd
 import pytest
 
 from stockfinder.infrastructure.market_sources import (
     industry_proxy_symbols,
     load_market_sources,
     regional_benchmark_symbols,
+    representative_industry_symbols,
+    resolve_industry_source,
     resolve_market_proxy,
     sector_proxy_symbols,
     validate_market_sources,
@@ -61,6 +64,27 @@ def test_market_proxy_resolution_prefers_regional_then_global_sources() -> None:
         "VGK",
         "regional benchmark fallback",
     )
+
+
+def test_unmapped_industry_uses_largest_market_cap_constituent() -> None:
+    universe = pd.DataFrame(
+        {
+            "Region": ["Europe", "Europe"],
+            "Sector": ["Financials", "Financials"],
+            "Industry": ["Insurance", "Insurance"],
+            "Symbol": ["SMALL", "LARGE"],
+            "Market cap": [10, 100],
+        }
+    )
+
+    representatives = representative_industry_symbols(universe)
+
+    assert resolve_industry_source(
+        "Europe", "Financials", "Insurance", representatives
+    ) == ("LARGE", "representative stock fallback")
+    assert resolve_industry_source(
+        "Europe", "Information Technology", "Semiconductors", representatives
+    ) == ("SMH", "dedicated industry ETF/index")
     assert (
         resolve_market_proxy(
             "Europe", "Industrials", "Unknown", dedicated_only=True
@@ -76,6 +100,10 @@ def test_market_sources_reject_reused_industry_symbols() -> None:
                 "version": 2,
                 "global": {
                     "benchmark": {"symbol": "ACWI", "kind": "ETF"},
+                    "industry_fallback": {
+                        "kind": "Stock",
+                        "selection": "largest_market_cap_constituent",
+                    },
                     "industries": {
                         "Banks": {"symbol": "KBE", "kind": "ETF"},
                         "Major Banks": {"symbol": "KBE", "kind": "ETF"},

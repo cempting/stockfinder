@@ -5,6 +5,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
+
 from stockfinder.infrastructure.runtime import application_data_dir
 
 DEFAULT_MARKET_SOURCES_PATH = Path(__file__).with_name(
@@ -41,6 +43,10 @@ def _migrate_market_sources(payload: dict[str, Any]) -> dict[str, Any]:
         "version": 2,
         "global": {
             "benchmark": {"symbol": "ACWI", "kind": "ETF"},
+            "industry_fallback": {
+                "kind": "Stock",
+                "selection": "largest_market_cap_constituent",
+            },
             "industries": payload.get("industry_proxies", {}),
         },
         "regions": {
@@ -64,6 +70,16 @@ def validate_market_sources(payload: dict[str, Any]) -> None:
     if not isinstance(regions, dict) or not regions:
         raise ValueError("regions must contain at least one region")
     _validate_instrument(global_sources.get("benchmark"), "global.benchmark")
+    fallback = global_sources.get("industry_fallback")
+    if not isinstance(fallback, dict):
+        raise ValueError("global.industry_fallback must be an object")
+    if fallback.get("kind") != "Stock":
+        raise ValueError("global.industry_fallback.kind must be Stock")
+    if fallback.get("selection") != "largest_market_cap_constituent":
+        raise ValueError(
+            "global.industry_fallback.selection must be "
+            "largest_market_cap_constituent"
+        )
     _validate_proxy_group(global_sources.get("industries"), "global.industries")
     for region, sources in regions.items():
         if not str(region).strip() or not isinstance(sources, dict):
@@ -153,3 +169,49 @@ def resolve_market_proxy(
         return regional_sectors[sector], "regional sector ETF/index"
     benchmark = region_sources.get("benchmark", sources["global"]["benchmark"])
     return str(benchmark["symbol"]).upper(), "regional benchmark fallback"
+
+
+def representative_industry_symbols(
+    universe: pd.DataFrame,
+) -> dict[tuple[str, str, str], str]:
+    """Select one largest-market-cap constituent for each regional industry."""
+    required = {"Region", "Sector", "Industry", "Symbol"}
+    if universe.empty or not required.issubset(universe.columns):
+        return {}
+    ranked = universe.copy()
+    market_cap = (
+        ranked["Market cap"]
+        if "Market cap" in ranked
+        else pd.Series(0, index=ranked.index)
+    )
+    ranked["_market_cap"] = pd.to_numeric(market_cap, errors="coerce").fillna(0)
+    ranked = ranked.sort_values(
+        ["Region", "Sector", "Industry", "_market_cap", "Symbol"],
+        ascending=[True, True, True, False, True],
+    )
+    selected = ranked.drop_duplicates(["Region", "Sector", "Industry"])
+    return {
+        (str(row.Region), str(row.Sector), str(row.Industry)): str(row.Symbol)
+        for row in selected.itertuples()
+    }
+
+
+def resolve_industry_source(
+    region: str,
+    sector: str,
+    industry: str,
+    representatives: dict[tuple[str, str, str], str],
+) -> tuple[str, str] | None:
+    """Resolve a dedicated ETF/index or the configured representative stock."""
+    dedicated = resolve_market_proxy(
+        region,
+        sector,
+        industry,
+        dedicated_only=True,
+    )
+    if dedicated is not None:
+        return dedicated
+    representative = representatives.get((region, sector, industry))
+    if representative:
+        return representative, "representative stock fallback"
+    return None

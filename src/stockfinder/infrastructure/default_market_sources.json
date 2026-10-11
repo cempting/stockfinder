@@ -2,6 +2,10 @@
   "version": 2,
   "global": {
     "benchmark": { "symbol": "ACWI", "kind": "ETF" },
+    "industry_fallback": {
+      "kind": "Stock",
+      "selection": "largest_market_cap_constituent"
+    },
     "industries": {
       "Aerospace & Defense": { "symbol": "ITA", "kind": "ETF" },
       "Automobiles": { "symbol": "CARZ", "kind": "ETF" },

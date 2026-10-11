@@ -102,13 +102,15 @@ without changing application code, create `market_sources.json` under
 `STOCKFINDER_DATA_DIR` with the same structure and restart the app. Every entry
 declares a `symbol` and `kind` (`ETF` or `Index`). Dedicated industry symbols
 must be unique so one instrument cannot silently stand in for several industries.
+The catalog also declares an explicit `Stock` fallback policy for industries that
+do not have a reviewed dedicated fund or index.
 
 The v2 catalog has one `global` block and a `regions.<region>` block for each
-market. Resolution prefers a regional industry source, then a global industry
-source, regional sector source, and regional benchmark. Flow Finder renders a
-chart only when a dedicated industry source is configured; otherwise it keeps
-the aggregate industry scores visible and labels the chart as needing proxy
-review. `analysis_config.json` contains strategy settings only and no longer
+market. Industry charts prefer a regional industry source, then a global industry
+source, and finally the largest-market-cap constituent in that exact regional
+industry. Broader comparisons may continue through the regional sector source and
+regional benchmark. The UI labels each fallback as a representative stock rather
+than an ETF. `analysis_config.json` contains strategy settings only and no longer
 duplicates market symbols. Existing v1 source files and legacy analysis settings
 are migrated when loaded.
 

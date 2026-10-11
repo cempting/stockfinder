@@ -13,7 +13,10 @@ from stockfinder.infrastructure.config import (
     configured_capital_movement,
     update_capital_movement,
 )
-from stockfinder.infrastructure.market_sources import resolve_market_proxy
+from stockfinder.infrastructure.market_sources import (
+    representative_industry_symbols,
+    resolve_industry_source,
+)
 from stockfinder.market_overview import (
     industry_movement_changes,
     industry_qualification_snapshot,
@@ -248,6 +251,7 @@ def render_capital_flow_workspace(
             _render_industry_overview(
                 filtered_industries,
                 selected_industry,
+                representative_industry_symbols(universe.data),
                 direction,
                 chart_range,
                 services,
@@ -351,6 +355,7 @@ def industry_score_fields(row: pd.Series) -> dict[str, str]:
 def _render_industry_overview(
     industries: pd.DataFrame,
     selected_industry: pd.Series,
+    representatives: dict[tuple[str, str, str], str],
     direction: str,
     chart_range: str,
     services: DashboardServices,
@@ -362,11 +367,11 @@ def _render_industry_overview(
         "all matching industries"
     )
     prepared = []
-    selected_resolution = resolve_market_proxy(
+    selected_resolution = resolve_industry_source(
         str(selected_industry["Region"]),
         str(selected_industry["Sector"]),
         str(selected_industry["Industry"]),
-        dedicated_only=True,
+        representatives,
     )
     selected_proxy = selected_resolution[0] if selected_resolution else None
     histories = {}
@@ -386,11 +391,11 @@ def _render_industry_overview(
         else:
             st.success(f"Updated {selected_proxy} and its persistent cache.")
     for _, row in industries.iterrows():
-        resolution = resolve_market_proxy(
+        resolution = resolve_industry_source(
             str(row["Region"]),
             str(row["Sector"]),
             str(row["Industry"]),
-            dedicated_only=True,
+            representatives,
         )
         proxy, role = resolution if resolution else (None, None)
         if proxy is not None and proxy not in histories:
@@ -415,9 +420,9 @@ def _render_industry_overview(
             history = histories[proxy]
             chart.image(price_sma_thumbnail(history.data), width="stretch")
         else:
-            chart.caption("Dedicated proxy not configured")
+            chart.caption("No representative source available")
         identity.markdown(f"**{row['Industry']}**")
-        proxy_label = f"{proxy} ({role})" if proxy else "Proxy review needed"
+        proxy_label = f"{proxy} ({role})" if proxy else "Source review needed"
         identity.caption(f"{row['Sector']} · {proxy_label} · {row['Movement change']}")
         for score_column, (score_name, value) in zip(
             score_columns,
@@ -432,8 +437,9 @@ def _render_industry_overview(
     sources = sorted({result.source for result in histories.values()})
     source_label = ", ".join(sources) if sources else "No proxy histories loaded"
     st.caption(
-        "Charts use unique configured industry ETFs or indices only. Flow scores "
-        f"use aggregate member price-volume evidence. Sources: {source_label}."
+        "Charts prefer configured industry ETFs or indices, then use the largest-"
+        "market-cap constituent as a representative stock. Flow scores use "
+        f"aggregate member price-volume evidence. Sources: {source_label}."
     )
 
 

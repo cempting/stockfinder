@@ -38,6 +38,8 @@ from stockfinder.data import (
 from stockfinder.infrastructure.config import AnalysisConfigStore
 from stockfinder.infrastructure.market_sources import (
     load_market_sources,
+    representative_industry_symbols,
+    resolve_industry_source,
     resolve_market_proxy,
 )
 from stockfinder.infrastructure.runtime import application_data_dir
@@ -1606,16 +1608,20 @@ def _industry_browser_frame(
     )
     frame = frame.join(stock_counts, on=["Region", "Sector", "Industry"])
     frame["Stocks"] = frame["Stocks"].fillna(0).astype(int)
+    representatives = representative_industry_symbols(candidates)
     proxies = frame.apply(
-        lambda row: resolve_market_proxy(
+        lambda row: resolve_industry_source(
             str(row.get("Listing region", row["Region"])),
             str(row["Sector"]),
             str(row["Industry"]),
+            representatives,
         ),
         axis=1,
     )
-    frame["ETF / proxy"] = proxies.map(lambda value: value[0])
-    frame["Proxy scope"] = proxies.map(lambda value: value[1])
+    frame["ETF / proxy"] = proxies.map(lambda value: value[0] if value else pd.NA)
+    frame["Proxy scope"] = proxies.map(
+        lambda value: value[1] if value else "Unavailable"
+    )
     return frame
 
 
