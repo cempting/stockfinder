@@ -19,8 +19,15 @@ class ProviderCapability(StrEnum):
     """External evidence categories supported by provider plugins."""
 
     MACRO_EVENTS = "macro_events"
+    MACRO_SERIES = "macro_series"
     NEWS_SENTIMENT = "news_sentiment"
+    SOCIAL_SENTIMENT = "social_sentiment"
+    FUND_FLOWS = "fund_flows"
     INSTITUTIONAL_FLOWS = "institutional_flows"
+    COMPANY_ESTIMATES = "company_estimates"
+    INSIDER_TRANSACTIONS = "insider_transactions"
+    OPTIONS_ACTIVITY = "options_activity"
+    BLOCK_ACTIVITY = "block_activity"
     CONSTITUENTS = "constituents"
 
 
@@ -34,11 +41,41 @@ REQUIRED_COLUMNS = {
         "Previous",
         "Source URL",
     ),
+    ProviderCapability.MACRO_SERIES: (
+        "Timestamp",
+        "Available at",
+        "Region",
+        "Series ID",
+        "Value",
+        "Unit",
+        "Frequency",
+        "Vintage",
+        "Source URL",
+    ),
     ProviderCapability.NEWS_SENTIMENT: (
         "Timestamp",
         "Symbol",
         "Headline",
         "Sentiment",
+        "Source URL",
+    ),
+    ProviderCapability.SOCIAL_SENTIMENT: (
+        "Timestamp",
+        "Symbol",
+        "Platform",
+        "Mention count",
+        "Unique authors",
+        "Sentiment",
+        "Attention z-score",
+        "Resolution confidence",
+        "Source URL",
+    ),
+    ProviderCapability.FUND_FLOWS: (
+        "As of",
+        "Symbol",
+        "Net flow",
+        "Currency",
+        "Window",
         "Source URL",
     ),
     ProviderCapability.INSTITUTIONAL_FLOWS: (
@@ -47,6 +84,48 @@ REQUIRED_COLUMNS = {
         "Institution",
         "Position value",
         "Change %",
+        "Source URL",
+    ),
+    ProviderCapability.COMPANY_ESTIMATES: (
+        "As of",
+        "Symbol",
+        "Metric",
+        "Period",
+        "Consensus",
+        "Low",
+        "High",
+        "Analyst count",
+        "Source URL",
+    ),
+    ProviderCapability.INSIDER_TRANSACTIONS: (
+        "Transaction date",
+        "Filed at",
+        "Symbol",
+        "Insider",
+        "Transaction",
+        "Shares",
+        "Value",
+        "Prearranged",
+        "Source URL",
+    ),
+    ProviderCapability.OPTIONS_ACTIVITY: (
+        "Timestamp",
+        "Symbol",
+        "Expiry",
+        "Strike",
+        "Put/Call",
+        "Volume",
+        "Open interest",
+        "Implied volatility",
+        "Source URL",
+    ),
+    ProviderCapability.BLOCK_ACTIVITY: (
+        "Timestamp",
+        "Symbol",
+        "Venue",
+        "Price",
+        "Shares",
+        "Value",
         "Source URL",
     ),
     ProviderCapability.CONSTITUENTS: (

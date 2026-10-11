@@ -4,11 +4,37 @@ from stockfinder.market_overview import (
     downside_control_response,
     downside_risk_snapshot,
     industry_confirmation_snapshot,
+    industry_movement_changes,
+    industry_qualification_snapshot,
     market_snapshot,
     regional_confirmation_snapshot,
     regional_market_snapshot,
     sector_allocation_snapshot,
+    stock_movement_changes,
 )
+
+
+def test_industry_qualification_explains_thresholds_and_peer_rank() -> None:
+    industries = pd.DataFrame(
+        {
+            "Region": ["Europe", "Europe"],
+            "Sector": ["Industrials", "Industrials"],
+            "Industry": ["Machinery", "Transport"],
+            "Movement state": ["Inflow", "Mixed"],
+            "Rotation score": [70.0, 40.0],
+            "Above rising SMA150 %": [60.0, pd.NA],
+            "Early rotation score": [45.0, 60.0],
+        }
+    )
+
+    result = industry_qualification_snapshot(industries).set_index("Industry")
+
+    assert bool(result.loc["Machinery", "Industry qualified"])
+    assert "Capital inflow: Inflow" in result.loc["Machinery", "Industry matches"]
+    assert "needs >= 55" in result.loc["Machinery", "Industry failures"]
+    assert result.loc["Machinery", "Industry peer rank"] == "1/2"
+    assert result.loc["Transport", "Industry evidence %"] == 75.0
+    assert result.loc["Transport", "Industry unavailable"] == "Trend breadth"
 
 
 def _history(start: float, end: float, periods: int = 180) -> pd.DataFrame:
@@ -120,6 +146,40 @@ def test_industry_confirmation_separates_broad_and_thin_leadership() -> None:
 
     assert snapshot.loc["Broad", "Confirmation"] == "Broad leadership"
     assert snapshot.loc["Thin", "Confirmation"] == "Thin leadership"
+
+
+def test_movement_changes_classify_industries_and_stocks() -> None:
+    keys = {
+        "Region": ["Europe", "Europe", "Europe", "Europe"],
+        "Sector": ["Technology"] * 4,
+        "Industry": ["New", "Turning", "Falling", "Stable"],
+    }
+    current = pd.DataFrame(
+        {
+            **keys,
+            "Movement state": ["Inflow", "Inflow", "Outflow", "Inflow"],
+            "Movement return %": [4.0, 3.0, -4.0, 2.0],
+            "Movement liquidity": [80.0, 75.0, 30.0, 62.0],
+            "Movement volume change %": [20.0, 15.0, -20.0, 3.0],
+            "Movement flow %": [60.0, 50.0, -60.0, 20.0],
+        }
+    )
+    previous = current.iloc[1:].copy()
+    previous["Movement state"] = ["Mixed", "Mixed", "Inflow"]
+    previous["Movement liquidity"] = [50.0, 60.0, 60.0]
+
+    industries = industry_movement_changes(current, previous).set_index("Industry")
+
+    assert industries.loc["New", "Movement change"] == "New"
+    assert industries.loc["Turning", "Movement change"] == "Newly strengthening"
+    assert industries.loc["Falling", "Movement change"] == "Deteriorating"
+    assert industries.loc["Stable", "Movement change"] == "Stable"
+    assert industries.loc["Turning", "Movement liquidity change"] == 25.0
+
+    stock_current = current.assign(Symbol=["NEW", "TURN", "FALL", "STABLE"])
+    stock_previous = previous.assign(Symbol=["TURN", "FALL", "STABLE"])
+    stocks = stock_movement_changes(stock_current, stock_previous).set_index("Symbol")
+    assert stocks.loc["TURN", "Movement change"] == "Newly strengthening"
 
 
 def test_downside_risk_snapshot_keeps_triggers_independent() -> None:

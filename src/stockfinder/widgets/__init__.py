@@ -2,6 +2,7 @@
 
 from stockfinder.presentation.widget_registry import WidgetRegistry
 from stockfinder.widgets.alert_center import render_alert_center
+from stockfinder.widgets.capital_flow_workspace import render_capital_flow_workspace
 from stockfinder.widgets.cross_asset_conditions import render_cross_asset_conditions
 from stockfinder.widgets.instrument_analysis import render_instrument_analysis
 from stockfinder.widgets.liquidity_breadth import render_liquidity_breadth
@@ -13,6 +14,7 @@ from stockfinder.widgets.regional_markets import render_regional_markets
 from stockfinder.widgets.rotation_explorer import render_rotation_explorer
 from stockfinder.widgets.rule_profile_editor import render_rule_profile_editor
 from stockfinder.widgets.security_score_evidence import render_security_score_evidence
+from stockfinder.widgets.security_scoreboard import render_security_scoreboard
 from stockfinder.widgets.trade_plan import render_trade_plan
 
 
@@ -20,6 +22,7 @@ def built_in_widget_registry() -> WidgetRegistry:
     """Return a registry containing every built-in widget type."""
     registry = WidgetRegistry()
     registry.register("alert_center", render_alert_center)
+    registry.register("capital_flow_workspace", render_capital_flow_workspace)
     registry.register("market_regime", render_market_regime)
     registry.register("cross_asset_conditions", render_cross_asset_conditions)
     registry.register("regional_markets", render_regional_markets)
@@ -29,6 +32,7 @@ def built_in_widget_registry() -> WidgetRegistry:
     registry.register("instrument_analysis", render_instrument_analysis)
     registry.register("rule_profile_editor", render_rule_profile_editor)
     registry.register("security_score_evidence", render_security_score_evidence)
+    registry.register("security_scoreboard", render_security_scoreboard)
     registry.register("peer_comparison", render_peer_comparison)
     registry.register("trade_plan", render_trade_plan)
     registry.register("portfolio_exposure", render_portfolio_exposure)

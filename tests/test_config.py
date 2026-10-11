@@ -5,12 +5,15 @@ import pytest
 from stockfinder.infrastructure.config import (
     AnalysisConfigStore,
     apply_profile_composition_preset,
+    capital_movement_sessions,
     configured_alert_rules,
+    configured_capital_movement,
     configured_proxy,
     configured_rule_profile,
     default_analysis_config,
     geography_column,
     update_alert_rules,
+    update_capital_movement,
     update_rule_profile,
 )
 
@@ -33,6 +36,44 @@ def test_config_store_round_trip_and_invalid_fallback(tmp_path) -> None:
 
     store.path.write_text("{invalid", encoding="utf-8")
     assert store.load() == default_analysis_config()
+
+
+def test_legacy_config_migrates_to_daily_capital_movement(tmp_path) -> None:
+    store = AnalysisConfigStore(tmp_path / "analysis.json")
+    legacy = default_analysis_config()
+    legacy.pop("capital_movement")
+    legacy["rule_profiles"]["Swing"]["minimum_setup_score"] = 77
+    store.path.write_text(json.dumps(legacy), encoding="utf-8")
+
+    loaded = store.load()
+
+    assert configured_capital_movement(loaded) == {
+        "period": "Daily",
+        "custom_sessions": 1,
+    }
+    assert capital_movement_sessions(loaded) == 1
+    assert loaded["rule_profiles"]["Swing"]["minimum_setup_score"] == 77
+
+
+def test_capital_movement_periods_are_resolved_and_validated() -> None:
+    config = default_analysis_config()
+
+    assert capital_movement_sessions(config) == 1
+    weekly = update_capital_movement(config, "Weekly", 1)
+    monthly = update_capital_movement(config, "Monthly", 1)
+    custom = update_capital_movement(config, "Custom", 13)
+
+    assert capital_movement_sessions(weekly) == 5
+    assert capital_movement_sessions(monthly) == 21
+    assert capital_movement_sessions(custom) == 13
+    assert config["capital_movement"]["period"] == "Daily"
+
+    with pytest.raises(ValueError, match="must be Daily"):
+        update_capital_movement(config, "Quarterly", 1)
+    with pytest.raises(ValueError, match="integer between 1 and 252"):
+        update_capital_movement(config, "Custom", 0)
+    with pytest.raises(ValueError, match="integer between 1 and 252"):
+        update_capital_movement(config, "Custom", True)
 
 
 def test_config_store_rejects_out_of_range_threshold(tmp_path) -> None:
@@ -67,7 +108,36 @@ def test_weighted_profile_defaults_preserve_legacy_configuration() -> None:
 
     assert configured["weighted_score_enabled"] is False
     assert configured["setup_weight"] == 40.0
+    assert configured["setup_match_mode"] == "any"
+    assert "heartbeat_consolidation" in configured["enabled_setup_filters"]
     assert "weighted_score_enabled" not in profile
+
+
+def test_setup_filter_configuration_is_validated() -> None:
+    config = default_analysis_config()
+
+    updated = update_rule_profile(
+        config,
+        "Swing",
+        {
+            "setup_match_mode": "all",
+            "enabled_setup_filters": ["sma50_cross", "increasing_volume"],
+        },
+    )
+
+    assert updated["rule_profiles"]["Swing"]["setup_match_mode"] == "all"
+    assert updated["rule_profiles"]["Swing"]["enabled_setup_filters"] == [
+        "sma50_cross",
+        "increasing_volume",
+    ]
+    with pytest.raises(ValueError, match="setup_match_mode"):
+        update_rule_profile(config, "Swing", {"setup_match_mode": "some"})
+    with pytest.raises(ValueError, match="enabled_setup_filters"):
+        update_rule_profile(config, "Swing", {"enabled_setup_filters": []})
+    with pytest.raises(ValueError, match="enabled_setup_filters"):
+        update_rule_profile(
+            config, "Swing", {"enabled_setup_filters": ["unknown"]}
+        )
 
 
 def test_profile_composition_preset_is_validated_without_mutation() -> None:

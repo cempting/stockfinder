@@ -285,7 +285,9 @@ def _dashboard_page(load_mode: str) -> None:
     registry.validate(dashboards)
     dashboard_names = {dashboard.title: dashboard for dashboard in dashboards}
 
-    _heading("Command center", "Configurable, linked market-analysis widgets")
+    requested_dashboard = st.session_state.pop("requested_dashboard", None)
+    if requested_dashboard in dashboard_names:
+        st.session_state["active_dashboard"] = requested_dashboard
     if st.session_state.get("active_dashboard") not in dashboard_names:
         st.session_state["active_dashboard"] = next(iter(dashboard_names))
     selected_name = st.segmented_control(
@@ -297,13 +299,18 @@ def _dashboard_page(load_mode: str) -> None:
     )
     dashboard = dashboard_names[selected_name]
     context = AnalysisContext(st.session_state)
-    if context.breadcrumb() and st.button("Clear analysis context"):
+    if (
+        selected_name != "Flow Finder"
+        and context.breadcrumb()
+        and st.button("Clear analysis context")
+    ):
         context.select("region", None)
         st.rerun()
     services = DashboardServices(
         get_history=get_history,
         analyze_security=cached_analysis,
         load_scan=_load_scan,
+        get_previous_scan=_previous_scan_frames,
         get_analysis_config=analysis_config_store().load,
         save_analysis_config=analysis_config_store().save,
         get_broker_symbols=lambda: set(
@@ -313,10 +320,12 @@ def _dashboard_page(load_mode: str) -> None:
         get_candidate_fundamentals=cached_candidate_fundamentals,
         get_positions=repository().positions,
         get_watchlist=repository().watchlist,
+        get_decision_snapshots=repository().decision_snapshots,
         save_position=repository().save_position,
         delete_position=repository().delete_position,
         save_watchlist=repository().save_watchlist,
         delete_watchlist=repository().delete_watchlist,
+        save_decision_snapshot=repository().save_decision_snapshot,
         get_active_rule_profile=lambda: str(
             st.session_state.get("active_rule_profile", "Swing")
         ),
@@ -1034,6 +1043,17 @@ def _cached_risk_profiles() -> pd.DataFrame:
         return pd.DataFrame()
     st.session_state["scan_risk_profiles"] = snapshot.risk_profiles
     return snapshot.risk_profiles
+
+
+def _previous_scan_frames() -> tuple[pd.DataFrame, pd.DataFrame]:
+    previous = scan_snapshot_store().load_previous()
+    config = analysis_config_store().load()
+    if (
+        previous is None
+        or previous.model_version != market_scan_model_version(config)
+    ):
+        return pd.DataFrame(), pd.DataFrame()
+    return previous.industries, previous.candidates
 
 
 def _market_page(load_mode: str) -> None:
@@ -3493,11 +3513,12 @@ def _selected_points(event: Any) -> list[dict[str, Any]]:
 
 
 def _heading(title: str, subtitle: str) -> None:
+    subtitle_html = f'<p class="subtitle">{subtitle}</p>' if subtitle else ""
     st.markdown(
         f"""
         <div class="eyebrow">DECISION WORKSPACE</div>
         <h1>{title}</h1>
-        <p class="subtitle">{subtitle}</p>
+        {subtitle_html}
         """,
         unsafe_allow_html=True,
     )
@@ -3626,6 +3647,21 @@ def _theme() -> None:
             background: var(--surface);
         }
         hr { border-color: var(--border) !important; }
+        @media (max-width: 640px) {
+            h1 { font-size: 1.7rem !important; }
+            .eyebrow { margin-top: 0.1rem; }
+            .st-key-active_dashboard [data-testid="stButtonGroup"] {
+                margin-bottom: 0.5rem;
+            }
+            .st-key-active_dashboard [data-testid="stButtonGroup"] > div {
+                gap: 0.65rem;
+                flex-wrap: nowrap;
+            }
+            .st-key-active_dashboard button {
+                font-size: 0.82rem !important;
+                padding: 0.35rem 0 0.3rem !important;
+            }
+        }
         </style>
         """,
         unsafe_allow_html=True,

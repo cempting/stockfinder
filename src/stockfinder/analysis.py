@@ -207,6 +207,65 @@ def liquidity_rotation(history: pd.DataFrame, sessions: int) -> dict[str, float]
     }
 
 
+def capital_movement_evidence(
+    history: pd.DataFrame, sessions: int
+) -> dict[str, float | str]:
+    """Compare recent directional dollar volume with the preceding window."""
+    if not isinstance(sessions, int) or isinstance(sessions, bool) or sessions < 1:
+        raise ValueError("sessions must be a positive integer")
+    window = history[["Close", "Volume"]].dropna().tail(sessions * 2 + 1)
+    if len(window) < sessions * 2 + 1:
+        return {
+            "return": 0.0,
+            "score": 0.0,
+            "volume_change": 0.0,
+            "flow_balance": 0.0,
+            "state": "Unavailable",
+        }
+
+    recent = window.tail(sessions)
+    baseline = window.iloc[-sessions * 2 : -sessions]
+    recent_dollar_volume = recent["Close"] * recent["Volume"]
+    baseline_dollar_volume = baseline["Close"] * baseline["Volume"]
+    baseline_mean = float(baseline_dollar_volume.mean())
+    volume_change = (
+        (float(recent_dollar_volume.mean()) / baseline_mean - 1) * 100
+        if baseline_mean > 0
+        else 0.0
+    )
+    movement_return = _period_return(window["Close"], sessions)
+    direction = window["Close"].pct_change().reindex(recent.index)
+    up_flow = float(recent_dollar_volume[direction > 0].sum())
+    down_flow = float(recent_dollar_volume[direction < 0].sum())
+    directional_total = up_flow + down_flow
+    flow_balance = (
+        (up_flow - down_flow) / directional_total * 100
+        if directional_total > 0
+        else 0.0
+    )
+    score = float(
+        np.mean(
+            [
+                _normalize(volume_change, -30, 50),
+                _normalize(flow_balance, -20, 20),
+            ]
+        )
+    )
+    if movement_return > 0 and flow_balance > 0:
+        state = "Inflow"
+    elif movement_return < 0 and flow_balance < 0:
+        state = "Outflow"
+    else:
+        state = "Mixed"
+    return {
+        "return": round(movement_return, 1),
+        "score": round(score, 1),
+        "volume_change": round(volume_change, 1),
+        "flow_balance": round(flow_balance, 1),
+        "state": state,
+    }
+
+
 def industry_rotation(sector: str) -> pd.DataFrame:
     """Rank a sector's industries using equal-weight member evidence."""
     members = SECURITY_UNIVERSE[SECURITY_UNIVERSE["Sector"] == sector]
@@ -290,6 +349,46 @@ def _aggregate_industry_history(
     )
     synthetic_volume = dollar_volume / close_index
     return pd.DataFrame({"Close": close_index, "Volume": synthetic_volume})
+
+
+def flow_pattern_evidence(history: pd.DataFrame) -> dict[str, bool | float]:
+    """Describe close/volume patterns for an aggregate or traded instrument."""
+    if history.empty or not {"Close", "Volume"}.issubset(history) or len(history) < 150:
+        return {
+            "Pattern consolidation": False,
+            "Pattern breakout": False,
+            "Pattern near SMA50": False,
+            "Pattern above SMA50": False,
+            "Pattern above SMA150": False,
+            "Pattern volume spike": False,
+            "Pattern distance to SMA50 %": float("nan"),
+            "Pattern volume ratio": float("nan"),
+        }
+    frame = history[["Close", "Volume"]].dropna()
+    close = frame["Close"]
+    volume = frame["Volume"]
+    sma50 = close.rolling(50).mean()
+    sma150 = close.rolling(150).mean()
+    latest = float(close.iloc[-1])
+    prior_high = float(close.iloc[-21:-1].max())
+    recent = close.iloc[-20:]
+    recent_range = float((recent.max() - recent.min()) / max(0.01, latest) * 100)
+    average_volume = float(volume.iloc[-51:-1].mean())
+    volume_ratio = (
+        float(volume.iloc[-1] / average_volume) if average_volume > 0 else 0.0
+    )
+    distance_to_sma50 = float((latest / sma50.iloc[-1] - 1) * 100)
+    positive_session = bool(close.iloc[-1] > close.iloc[-2])
+    return {
+        "Pattern consolidation": recent_range <= 10.0,
+        "Pattern breakout": latest > prior_high,
+        "Pattern near SMA50": abs(distance_to_sma50) <= 3.0,
+        "Pattern above SMA50": latest > sma50.iloc[-1],
+        "Pattern above SMA150": latest > sma150.iloc[-1],
+        "Pattern volume spike": volume_ratio >= 1.5 and positive_session,
+        "Pattern distance to SMA50 %": round(distance_to_sma50, 1),
+        "Pattern volume ratio": round(volume_ratio, 2),
+    }
 
 
 def rank_sector_stocks(sector: str, industry: str | None = None) -> pd.DataFrame:
@@ -516,8 +615,18 @@ def early_rotation_evidence(
 def broad_rotation_scan(
     universe: pd.DataFrame,
     histories: dict[str, pd.DataFrame],
+    movement_sessions: int = 1,
+    movement_label: str = "Daily",
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Aggregate all stocks across weekly through six-month liquidity horizons."""
+    """Aggregate rotation evidence and one active capital-movement period."""
+    if (
+        not isinstance(movement_sessions, int)
+        or isinstance(movement_sessions, bool)
+        or not 1 <= movement_sessions <= 252
+    ):
+        raise ValueError("movement_sessions must be an integer between 1 and 252")
+    if not movement_label.strip():
+        raise ValueError("movement_label must not be empty")
     windows = {"1W": 5, "1M": 21, "3M": 63, "6M": 126}
     industry_rows = []
     market_histories = {
@@ -558,6 +667,8 @@ def broad_rotation_scan(
         flow_composite = float(
             np.mean([metrics["flow_balance"] for metrics in liquidity.values()])
         )
+        movement = capital_movement_evidence(aggregate, movement_sessions)
+        patterns = flow_pattern_evidence(aggregate)
         momentum_change = float(
             np.mean(
                 [
@@ -642,6 +753,14 @@ def broad_rotation_scan(
                 },
                 "Liquidity composite": round(liquidity_composite, 1),
                 "Flow composite %": round(flow_composite, 1),
+                "Movement period": movement_label,
+                "Movement sessions": movement_sessions,
+                "Movement return %": movement["return"],
+                "Movement liquidity": movement["score"],
+                "Movement volume change %": movement["volume_change"],
+                "Movement flow %": movement["flow_balance"],
+                "Movement state": movement["state"],
+                **patterns,
                 "Momentum change": round(momentum_change, 1),
                 "Liquidity change": round(liquidity_change, 1),
                 "Recent flow %": round(recent_flow, 1),
@@ -673,8 +792,29 @@ def broad_rotation_scan(
                 "Liquidity composite": ("Liquidity composite", "mean"),
                 "Flow composite %": ("Flow composite %", "mean"),
                 "Rotation score": ("Rotation score", "mean"),
+                "Movement return %": ("Movement return %", "mean"),
+                "Movement liquidity": ("Movement liquidity", "mean"),
+                "Movement volume change %": (
+                    "Movement volume change %",
+                    "mean",
+                ),
+                "Movement flow %": ("Movement flow %", "mean"),
             },
         )
+    )
+    sectors["Movement period"] = movement_label
+    sectors["Movement sessions"] = movement_sessions
+    sectors["Movement state"] = sectors.apply(
+        lambda row: (
+            "Inflow"
+            if row["Movement return %"] > 0 and row["Movement flow %"] > 0
+            else (
+                "Outflow"
+                if row["Movement return %"] < 0 and row["Movement flow %"] < 0
+                else "Mixed"
+            )
+        ),
+        axis=1,
     )
     sectors["Above rising SMA150 %"] = (
         sectors.pop("_breadth_members") / sectors["Members"]
@@ -698,6 +838,8 @@ def breakout_candidates(
     universe: pd.DataFrame,
     histories: dict[str, pd.DataFrame],
     winning_industries: set[str | tuple[str, str, str]],
+    movement_sessions: int = 1,
+    movement_label: str = "Daily",
 ) -> pd.DataFrame:
     """Describe filterable stocks in selected industries with technical evidence."""
     rows = []
@@ -718,6 +860,7 @@ def breakout_candidates(
         distance_to_sma50 = setup.metrics["Distance to SMA50 %"]
         crossed_sma50_recently = bool(setup.metrics["Crossed SMA50 recently"])
         volume_trend_ratio = setup.metrics["Volume trend ratio"]
+        movement = capital_movement_evidence(history, movement_sessions)
         returns = close.pct_change().dropna()
         volatility = float(returns.std() * np.sqrt(252) * 100)
         drawdown = close / close.cummax() - 1
@@ -762,12 +905,24 @@ def breakout_candidates(
                 ),
                 "Pivot": setup.pivot,
                 "Base sessions": int(setup.metrics["Base length sessions"]),
+                "Base maturity score": setup.metrics["Base maturity score"],
                 "Heartbeat turns": int(setup.metrics["Heartbeat turns"]),
                 "Base range %": round(setup.metrics["Base range %"], 1),
                 "From pivot %": round(-setup.metrics["Distance to pivot %"], 1),
                 "Breakout volume": round(setup.metrics["Breakout volume ratio"], 2),
                 "Volume increasing": volume_trend_ratio >= 1.10,
                 "Volume trend ratio": round(volume_trend_ratio, 2),
+                "Volume recency sessions": setup.metrics[
+                    "Volume recency sessions"
+                ],
+                "Volume recency score": setup.metrics["Volume recency score"],
+                "Movement period": movement_label,
+                "Movement sessions": movement_sessions,
+                "Movement return %": movement["return"],
+                "Movement liquidity": movement["score"],
+                "Movement volume change %": movement["volume_change"],
+                "Movement flow %": movement["flow_balance"],
+                "Movement state": movement["state"],
                 "Volatility %": round(volatility, 1),
                 "Max drawdown %": round(float(drawdown.min() * 100), 1),
                 "Setup score": setup.score,
@@ -818,6 +973,16 @@ def analyze_long_swing_setup(history: pd.DataFrame) -> SwingSetup:
     baseline_volume = float(frame["Volume"].iloc[-50:-10].mean())
     volume_trend_ratio = (
         recent_volume / baseline_volume if baseline_volume > 0 else 0.0
+    )
+    prior_volume_average = frame["Volume"].shift(1).rolling(50, min_periods=20).mean()
+    meaningful_volume = (
+        (frame["Volume"] >= 1.5 * prior_volume_average)
+        & (close.pct_change() > 0)
+    ).tail(20)
+    volume_recency_sessions = (
+        len(meaningful_volume) - 1 - int(np.flatnonzero(meaningful_volume)[-1])
+        if meaningful_volume.any()
+        else None
     )
     distance_to_sma50 = float((latest_close / sma50.iloc[-1] - 1) * 100)
     crossed_sma50_recently = bool(
@@ -887,6 +1052,20 @@ def analyze_long_swing_setup(history: pd.DataFrame) -> SwingSetup:
 
     relevant_checks = list(checks.values())
     score = round(100 * sum(relevant_checks) / len(relevant_checks), 1)
+    constructive_base = bool(
+        checks["Base range no more than 15%"]
+        and checks["Base volume controlled"]
+    )
+    base_maturity_score = (
+        min(100.0, max(0.0, (base_length - 5) / 15 * 100))
+        if constructive_base
+        else 0.0
+    )
+    volume_recency_score = (
+        max(0.0, (20 - volume_recency_sessions) / 20 * 100)
+        if volume_recency_sessions is not None
+        else 0.0
+    )
     entry = base_high + max(0.01, 0.25 * atr)
     atr_stop = entry - 2 * atr
     structural_stop = base_low - 0.25 * atr
@@ -899,6 +1078,7 @@ def analyze_long_swing_setup(history: pd.DataFrame) -> SwingSetup:
         "SMA50 slope 20D %": float((sma50.iloc[-1] / sma50.iloc[-20] - 1) * 100),
         "SMA150 slope 20D %": float((sma150.iloc[-1] / sma150.iloc[-20] - 1) * 100),
         "Base length sessions": float(base_length),
+        "Base maturity score": round(base_maturity_score, 1),
         "Heartbeat turns": float(heartbeat_turns),
         "Base range %": base_range * 100,
         "Distance to pivot %": distance_to_pivot * 100,
@@ -906,6 +1086,8 @@ def analyze_long_swing_setup(history: pd.DataFrame) -> SwingSetup:
         "Base volume ratio": base_volume_ratio,
         "Breakout volume ratio": breakout_volume,
         "Volume trend ratio": volume_trend_ratio,
+        "Volume recency sessions": volume_recency_sessions,
+        "Volume recency score": round(volume_recency_score, 1),
         "Breakout close location %": close_location * 100,
         "ATR14": atr,
     }

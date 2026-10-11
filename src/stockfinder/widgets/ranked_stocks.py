@@ -3,17 +3,20 @@
 import pandas as pd
 import streamlit as st
 
+from stockfinder.market_overview import stock_movement_changes
 from stockfinder.presentation.dashboard import WidgetSpec
 from stockfinder.presentation.dashboard_runtime import DashboardServices
 from stockfinder.presentation.navigation import AnalysisContext
 from stockfinder.screening import (
     evaluate_stock_rules,
+    qualification_changes,
     rank_stocks,
     screen_ranked_stocks,
 )
 from stockfinder.widgets.context_controls import linked_selectbox
 
 RANKING_OPTIONS = (
+    "Opportunity score",
     "Setup score",
     "Weighted profile score",
     "Highest safety",
@@ -21,6 +24,7 @@ RANKING_OPTIONS = (
     "Longest heartbeat base",
     "Fastest-rising SMA50",
     "Strongest volume interest",
+    "Strongest capital movement",
 )
 
 
@@ -89,6 +93,16 @@ def render_ranked_stocks(
         broker_symbols=broker_symbols,
         broker_only=broker_only,
     )
+    _, previous_candidates = services.get_previous_scan()
+    previous_contextual = _context_candidates(previous_candidates, context)
+    previous_evaluated = evaluate_stock_rules(
+        previous_contextual,
+        profile,
+        broker_symbols=broker_symbols,
+        broker_only=broker_only,
+    )
+    evaluated = qualification_changes(evaluated, previous_evaluated)
+    evaluated = stock_movement_changes(evaluated, previous_evaluated)
     ranked = screen_ranked_stocks(
         contextual,
         region=context.get("region") if spec.follow_context else None,
@@ -99,6 +113,23 @@ def render_ranked_stocks(
         broker_only=broker_only,
         ranking=ranking,
     )
+    transition_columns = [
+        "Symbol",
+        "Qualification change",
+        "Movement change",
+        "Movement return % change",
+        "Movement liquidity change",
+    ]
+    available_transitions = [
+        column for column in transition_columns if column in evaluated
+    ]
+    if not ranked.empty and len(available_transitions) > 1:
+        ranked = ranked.merge(
+            evaluated[available_transitions],
+            on="Symbol",
+            how="left",
+            suffixes=("", "_transition"),
+        )
     if ranked.empty:
         fallback = evaluated
         if broker_only:
@@ -113,9 +144,14 @@ def render_ranked_stocks(
         )
 
     passing_count = int((evaluated["Profile result"] == "Pass").sum())
+    movement_period = str(
+        contextual["Movement period"].iloc[0]
+        if "Movement period" in contextual
+        else "Configured"
+    )
     st.caption(
         f"{passing_count:,} of {len(contextual):,} analyzed stocks pass the "
-        f"{profile_name} profile"
+        f"{profile_name} profile · capital movement: {movement_period}"
     )
     symbols = ranked["Symbol"].astype(str).tolist()
     linked_selectbox(
@@ -133,12 +169,28 @@ def render_ranked_stocks(
             "Symbol",
             "Company",
             "Profile result",
+            "Qualification change",
+            "Setup matches",
+            "Setup misses",
+            "Setup evidence %",
             "Rule failures",
             "Broker availability",
             "Setup state",
+            "Opportunity score",
+            "Opportunity data %",
+            "Stock peer rank",
             "Setup score",
+            "Base maturity score",
+            "Volume recency sessions",
+            "Volume recency score",
             "Weighted score",
             "Weighted data %",
+            "Movement state",
+            "Movement change",
+            "Movement return %",
+            "Movement liquidity",
+            "Movement volume change %",
+            "Movement flow %",
             "Quality",
             "Market risk",
             "Volatility %",
@@ -158,12 +210,35 @@ def render_ranked_stocks(
             "Setup score": st.column_config.ProgressColumn(
                 min_value=0, max_value=100
             ),
+            "Opportunity score": st.column_config.ProgressColumn(
+                min_value=0, max_value=100
+            ),
+            "Opportunity data %": st.column_config.ProgressColumn(
+                "Rank evidence", min_value=0, max_value=100
+            ),
+            "Base maturity score": st.column_config.ProgressColumn(
+                min_value=0, max_value=100
+            ),
+            "Volume recency score": st.column_config.ProgressColumn(
+                min_value=0, max_value=100
+            ),
             "Weighted score": st.column_config.ProgressColumn(
                 min_value=0, max_value=100
             ),
             "Weighted data %": st.column_config.ProgressColumn(
                 "Evidence coverage", min_value=0, max_value=100
             ),
+            "Setup evidence %": st.column_config.ProgressColumn(
+                min_value=0, max_value=100
+            ),
+            "Movement liquidity": st.column_config.ProgressColumn(
+                min_value=0, max_value=100
+            ),
+            "Movement return %": st.column_config.NumberColumn(format="%+.1f%%"),
+            "Movement volume change %": st.column_config.NumberColumn(
+                format="%+.1f%%"
+            ),
+            "Movement flow %": st.column_config.NumberColumn(format="%+.1f%%"),
             "Quality": st.column_config.ProgressColumn(min_value=0, max_value=100),
             "Market risk": st.column_config.ProgressColumn(
                 "Observed risk", min_value=0, max_value=100
@@ -200,10 +275,26 @@ def render_ranked_stocks(
                     "Symbol",
                     "Company",
                     "Rule failures",
+                    "Qualification change",
+                    "Setup matches",
+                    "Setup misses",
+                    "Setup evidence %",
                     "Broker availability",
+                    "Opportunity score",
+                    "Opportunity data %",
+                    "Stock peer rank",
                     "Setup score",
+                    "Base maturity score",
+                    "Volume recency sessions",
+                    "Volume recency score",
                     "Weighted score",
                     "Weighted data %",
+                    "Movement state",
+                    "Movement change",
+                    "Movement return %",
+                    "Movement liquidity",
+                    "Movement volume change %",
+                    "Movement flow %",
                     "Quality",
                     "Market risk",
                     "Volatility %",
@@ -228,5 +319,7 @@ def _context_candidates(
     ):
         selected = context.get(level)
         if selected:
+            if column not in frame:
+                return frame.iloc[0:0]
             frame = frame[frame[column].astype(str) == selected]
     return frame

@@ -50,6 +50,24 @@ def test_six_month_liquidity_requires_two_months_of_data() -> None:
     }
 
 
+def test_flow_pattern_evidence_detects_breakout_trend_and_volume() -> None:
+    close = np.concatenate([np.linspace(80, 100, 179), [104.0]])
+    history = pd.DataFrame(
+        {
+            "Close": close,
+            "Volume": np.concatenate([np.full(179, 1_000_000), [2_000_000]]),
+        }
+    )
+
+    evidence = analysis.flow_pattern_evidence(history)
+
+    assert evidence["Pattern breakout"]
+    assert evidence["Pattern above SMA50"]
+    assert evidence["Pattern above SMA150"]
+    assert evidence["Pattern volume spike"]
+    assert evidence["Pattern volume ratio"] == 2.0
+
+
 def test_metals_analysis_ranks_stronger_price_and_flow_first() -> None:
     sessions = 180
     histories = {
@@ -266,6 +284,13 @@ def test_broad_rotation_excludes_downward_industry() -> None:
         "Flow 1M %",
         "Flow 3M %",
         "Flow 6M %",
+        "Movement period",
+        "Movement sessions",
+        "Movement return %",
+        "Movement liquidity",
+        "Movement volume change %",
+        "Movement flow %",
+        "Movement state",
         "Liquidity composite",
         "Liquidity confirmations",
         "Momentum change",
@@ -279,6 +304,68 @@ def test_broad_rotation_excludes_downward_industry() -> None:
         "Positive dollar volume",
         "Close pressure",
     }.issubset(industries.columns)
+
+
+def test_broad_rotation_uses_adjustable_capital_movement_period() -> None:
+    dates = pd.bdate_range("2025-01-01", periods=220)
+    close = np.concatenate([np.full(215, 100.0), [101, 102, 103, 104, 110]])
+    volume = np.concatenate(
+        [np.full(219, 1_000_000), np.array([3_000_000])]
+    )
+    universe = pd.DataFrame(
+        [("MOVE", "Move", "Technology", "Software")],
+        columns=["Symbol", "Name", "Sector", "Industry"],
+    )
+    histories = {
+        "MOVE": pd.DataFrame(
+            {"Close": close, "Volume": volume},
+            index=dates,
+        )
+    }
+
+    _, daily = analysis.broad_rotation_scan(
+        universe, histories, movement_sessions=1, movement_label="Daily"
+    )
+    _, custom = analysis.broad_rotation_scan(
+        universe, histories, movement_sessions=5, movement_label="Custom (5s)"
+    )
+
+    daily_row = daily.iloc[0]
+    custom_row = custom.iloc[0]
+    assert daily_row["Movement period"] == "Daily"
+    assert daily_row["Movement sessions"] == 1
+    assert daily_row["Movement state"] == "Inflow"
+    assert daily_row["Movement return %"] != custom_row["Movement return %"]
+    assert daily_row["Movement volume change %"] > custom_row[
+        "Movement volume change %"
+    ]
+    assert custom_row["Movement period"] == "Custom (5s)"
+
+
+def test_broad_rotation_rejects_invalid_capital_movement_period() -> None:
+    with pytest.raises(ValueError, match="integer between 1 and 252"):
+        analysis.broad_rotation_scan(pd.DataFrame(), {}, movement_sessions=0)
+
+
+def test_setup_ranking_evidence_caps_base_and_rewards_recent_positive_volume() -> None:
+    dates = pd.bdate_range("2025-01-01", periods=220)
+    close = np.concatenate([np.linspace(70, 100, 219), [101.0]])
+    volume = np.concatenate([np.full(219, 1_000_000), [2_000_000]])
+    history = pd.DataFrame(
+        {
+            "High": close + 1,
+            "Low": close - 1,
+            "Close": close,
+            "Volume": volume,
+        },
+        index=dates,
+    )
+
+    setup = analysis.analyze_long_swing_setup(history)
+
+    assert setup.metrics["Base maturity score"] == 100.0
+    assert setup.metrics["Volume recency sessions"] == 0
+    assert setup.metrics["Volume recency score"] == 100.0
 
 
 def test_early_rotation_detects_broad_accumulation_before_established_trend() -> None:
@@ -434,6 +521,13 @@ def test_breakout_candidates_retain_independent_filter_evidence() -> None:
     assert "SMA50 slope 20D %" in evidence
     assert "Volume increasing" in evidence
     assert "Volume trend ratio" in evidence
+    assert set(evidence["Movement period"]) == {"Daily"}
+    assert set(evidence["Movement sessions"]) == {1}
+    assert "Movement return %" in evidence
+    assert "Movement liquidity" in evidence
+    assert "Movement volume change %" in evidence
+    assert "Movement flow %" in evidence
+    assert "Movement state" in evidence
     assert not bool(evidence.loc["DOWN", "Price above SMA50"])
     assert not bool(evidence.loc["DOWN", "Price above SMA150"])
     assert not bool(evidence.loc["BASE", "Volume Evidence"])

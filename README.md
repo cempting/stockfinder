@@ -5,6 +5,14 @@ fundamental and risk evaluation, and technical confirmation.
 
 The product vision and requirements gathered during discovery are documented
 in [docs/product-vision.md](docs/product-vision.md).
+The shared economic and market vocabulary is defined in
+[docs/domain-glossary.md](docs/domain-glossary.md), and the declarative analysis
+language for the redesign is specified in
+[docs/analysis-dsl.md](docs/analysis-dsl.md).
+Confirmed owner decisions and redesign acceptance criteria are recorded in
+[docs/redesign-discovery.md](docs/redesign-discovery.md).
+Current specification and implementation progress is tracked in
+[docs/redesign-status.md](docs/redesign-status.md).
 Package ownership and dependency rules are documented in
 [docs/architecture.md](docs/architecture.md).
 Optional licensed-provider adapters are documented in

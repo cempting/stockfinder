@@ -1,3 +1,4 @@
+import json
 import sqlite3
 from datetime import UTC, datetime
 
@@ -105,6 +106,37 @@ def test_position_round_trip_and_delete(tmp_path) -> None:
     assert repository.positions().empty
 
 
+def test_decision_snapshots_are_immutable_and_filterable(tmp_path) -> None:
+    repository = Repository(tmp_path / "stockfinder.db")
+
+    first_id = repository.save_decision_snapshot(
+        "aapl",
+        "Planned",
+        "Swing",
+        "Initial thesis",
+        "",
+        {"rule_version": "stockfinder/v1", "entry": 100.0},
+    )
+    second_id = repository.save_decision_snapshot(
+        "AAPL",
+        "Rejected",
+        "Swing",
+        "",
+        "Event risk",
+        {"rule_version": "stockfinder/v1", "entry": 105.0},
+    )
+    repository.save_decision_snapshot(
+        "MSFT", "Watchlist", "Position", "Monitor", "", {"entry": 400.0}
+    )
+
+    snapshots = repository.decision_snapshots("aapl")
+
+    assert first_id < second_id
+    assert snapshots["decision"].tolist() == ["Rejected", "Planned"]
+    assert snapshots.iloc[0]["rejection_reason"] == "Event risk"
+    assert json.loads(snapshots.iloc[1]["evidence_json"])["entry"] == 100.0
+
+
 def test_repository_migrates_legacy_positions_to_usd(tmp_path) -> None:
     path = tmp_path / "stockfinder.db"
     with sqlite3.connect(path) as connection:
@@ -151,6 +183,35 @@ def test_scan_snapshot_round_trip(tmp_path) -> None:
     assert loaded.model_version == "test-v1"
     pd.testing.assert_frame_equal(loaded.candidates, snapshot.candidates)
     pd.testing.assert_frame_equal(loaded.risk_profiles, snapshot.risk_profiles)
+
+
+def test_scan_snapshot_retains_previous_successful_scan(tmp_path) -> None:
+    store = ScanSnapshotStore(tmp_path / "latest_scan")
+
+    def snapshot(symbol: str, day: int) -> ScanSnapshot:
+        return ScanSnapshot(
+            universe=pd.DataFrame({"Symbol": [symbol]}),
+            sectors=pd.DataFrame(),
+            industries=pd.DataFrame({"Industry": ["Software"]}),
+            candidates=pd.DataFrame({"Symbol": [symbol]}),
+            completed_at=datetime(2026, 10, day, 18, 0, tzinfo=UTC),
+            source="Test source",
+            coverage=100,
+            mode="standard",
+            model_version="test-v1",
+        )
+
+    store.save(snapshot("FIRST", 9))
+    assert store.load_previous() is None
+
+    store.save(snapshot("SECOND", 10))
+
+    latest = store.load()
+    previous = store.load_previous()
+    assert latest is not None
+    assert previous is not None
+    assert latest.universe["Symbol"].tolist() == ["SECOND"]
+    assert previous.universe["Symbol"].tolist() == ["FIRST"]
 
 
 def test_scan_snapshot_loads_without_legacy_risk_profiles(tmp_path) -> None:

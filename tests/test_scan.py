@@ -10,6 +10,7 @@ from stockfinder.infrastructure.storage import ScanSnapshot, ScanSnapshotStore
 from stockfinder.scan import (
     RefreshAlreadyRunningError,
     main,
+    market_scan_model_version,
     refresh_market_scan,
     refresh_process_lock,
 )
@@ -63,12 +64,34 @@ def test_refresh_market_scan_builds_and_persists_snapshot(tmp_path) -> None:
 
     assert snapshot.coverage == 100.0
     assert snapshot.mode == "standard"
-    assert snapshot.model_version.endswith("listing_region")
+    assert snapshot.model_version.endswith("movement-daily-1s")
     assert not snapshot.sectors.empty
     assert not snapshot.industries.empty
+    assert set(snapshot.industries["Movement period"]) == {"Daily"}
+    assert set(snapshot.industries["Movement sessions"]) == {1}
+    assert set(snapshot.candidates["Movement period"]) == {"Daily"}
+    assert set(snapshot.candidates["Movement sessions"]) == {1}
     assert len(snapshot.risk_profiles) == 2
     assert store.load() is not None
     assert events[-1] == ("Complete", 2, 2, 2)
+
+
+def test_scan_identity_changes_with_capital_movement_period() -> None:
+    daily = default_analysis_config()
+    weekly = default_analysis_config()
+    weekly["capital_movement"] = {
+        "period": "Weekly",
+        "custom_sessions": 1,
+    }
+    custom = default_analysis_config()
+    custom["capital_movement"] = {
+        "period": "Custom",
+        "custom_sessions": 13,
+    }
+
+    assert market_scan_model_version(daily).endswith("movement-daily-1s")
+    assert market_scan_model_version(weekly).endswith("movement-weekly-5s")
+    assert market_scan_model_version(custom).endswith("movement-custom-13s")
 
 
 def test_refresh_cli_returns_warning_for_low_coverage(

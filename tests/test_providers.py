@@ -4,6 +4,7 @@ import pandas as pd
 
 from stockfinder.data import DataResult
 from stockfinder.providers import (
+    REQUIRED_COLUMNS,
     ProviderCapability,
     ProviderRegistry,
     ProviderRequest,
@@ -83,6 +84,17 @@ def test_provider_registry_returns_transparent_unavailable_result() -> None:
         ProviderCapability.MACRO_EVENTS,
         ProviderRequest(),
     ).warning
+
+
+def test_every_provider_capability_has_schema_correct_unavailable_data() -> None:
+    registry = ProviderRegistry()
+
+    for capability in ProviderCapability:
+        result = registry.fetch(capability, ProviderRequest())
+        assert result.is_fallback is True
+        assert result.data.empty
+        assert tuple(result.data.columns) == REQUIRED_COLUMNS[capability]
+        assert capability.value in result.warning
 
 
 def test_provider_discovery_loads_factories_and_reports_failures() -> None:
