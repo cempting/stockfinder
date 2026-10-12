@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stockfinder.local/schema/stockfinder-v1.schema.json",
+  "title": "Stockfinder analysis pack v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["dsl", "kind", "id", "name", "version"],
+  "properties": {
+    "dsl": { "const": "stockfinder/v1" },
+    "kind": { "const": "analysis_pack" },
+    "id": { "$ref": "#/$defs/id" },
+    "name": { "type": "string", "minLength": 1 },
+    "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+    "definitions": { "$ref": "#/$defs/nodes" },
+    "signals": { "$ref": "#/$defs/nodes" },
+    "regimes": { "$ref": "#/$defs/nodes" },
+    "policies": { "$ref": "#/$defs/nodes" }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_.]*$"
+    },
+    "nodes": {
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "object",
+        "required": ["id"],
+        "properties": { "id": { "$ref": "#/$defs/id" } },
+        "additionalProperties": true
+      }
+    }
+  }
+}

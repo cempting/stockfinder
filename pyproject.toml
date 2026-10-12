@@ -17,6 +17,8 @@ dependencies = [
     "pillow>=11.0",
     "plotly>=6.0",
     "pyarrow>=18.0",
+    "pyyaml>=6.0",
+    "jsonschema>=4.23",
     "streamlit>=1.45",
     "yfinance>=0.2.54",
 ]

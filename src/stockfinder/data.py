@@ -54,20 +54,6 @@ NASDAQ_SECTOR_MAP = {
     "Utilities": "Utilities",
 }
 
-SECTOR_ETFS = {
-    "Communication Services": "XLC",
-    "Consumer Discretionary": "XLY",
-    "Consumer Staples": "XLP",
-    "Energy": "XLE",
-    "Financials": "XLF",
-    "Health Care": "XLV",
-    "Industrials": "XLI",
-    "Information Technology": "XLK",
-    "Materials": "XLB",
-    "Real Estate": "XLRE",
-    "Utilities": "XLU",
-}
-
 METAL_PROXIES = {
     "GLD": ("Gold", "Precious metal"),
     "SLV": ("Silver", "Precious metal"),
@@ -77,29 +63,6 @@ METAL_PROXIES = {
     "DBB": ("Industrial metals basket", "Industrial metals"),
 }
 METALS_BENCHMARK = "DBC"
-
-INDUSTRY_ETFS = {
-    "Internet Content": "FDN",
-    "Broadline Retail": "XRT",
-    "Automobiles": "CARZ",
-    "Consumer Staples Retail": "RTH",
-    "Household Products": "RHS",
-    "Integrated Oil & Gas": "XOP",
-    "Diversified Banks": "KBE",
-    "Transaction Processing": "IPAY",
-    "Pharmaceuticals": "PPH",
-    "Managed Health Care": "IHF",
-    "Aerospace & Defense": "ITA",
-    "Machinery": "AIRR",
-    "Semiconductors": "SMH",
-    "Systems Software": "IGV",
-    "Technology Hardware": "IYW",
-    "Industrial Gases": "IYM",
-    "Copper": "COPX",
-    "Industrial REITs": "INDS",
-    "Telecom Tower REITs": "SRVR",
-    "Electric Utilities": "VPU",
-}
 
 SECURITY_UNIVERSE = pd.DataFrame(
     [
@@ -812,11 +775,25 @@ def _history_cache_max_age_hours() -> float:
 
 
 def _minimum_history_rows(period: str) -> int:
-    return {"6mo": 80, "1y": 170, "2y": 350}.get(period, 50)
+    return {
+        "5d": 2,
+        "1mo": 10,
+        "3mo": 40,
+        "6mo": 80,
+        "1y": 170,
+        "2y": 350,
+    }.get(period, 50)
 
 
 def _trim_history(history: pd.DataFrame, period: str) -> pd.DataFrame:
-    sessions = {"1mo": 23, "3mo": 66, "6mo": 132, "1y": 264, "2y": 528}
+    sessions = {
+        "5d": 5,
+        "1mo": 23,
+        "3mo": 66,
+        "6mo": 132,
+        "1y": 264,
+        "2y": 528,
+    }
     limit = sessions.get(period)
     return history.tail(limit) if limit is not None else history
 
@@ -927,7 +904,11 @@ def _download_history_chunk(
 
 
 @lru_cache(maxsize=32)
-def get_batch_histories(symbols: tuple[str, ...], period: str = "2y") -> DataResult:
+def get_batch_histories(
+    symbols: tuple[str, ...],
+    period: str = "2y",
+    force_refresh: bool = False,
+) -> DataResult:
     """Return cached daily histories, adaptively retrying stale or missing data."""
     retrieved_at = datetime.now(UTC)
     normalized = tuple(dict.fromkeys(symbol.upper() for symbol in symbols if symbol))
@@ -941,12 +922,16 @@ def get_batch_histories(symbols: tuple[str, ...], period: str = "2y") -> DataRes
     for symbol in normalized:
         cached = cache.load(symbol)
         if (
-            cached is not None
+            not force_refresh
+            and cached is not None
             and len(cached) >= minimum_rows
             and cache.is_fresh(symbol, _history_cache_max_age_hours())
         ):
             histories[symbol] = _trim_history(cached, period)
-        elif cached is not None and len(cached) >= minimum_rows:
+        elif (
+            cached is not None
+            and len(cached) >= minimum_rows
+        ):
             needs_update.append(symbol)
         else:
             needs_full_history.append(symbol)
@@ -963,7 +948,7 @@ def get_batch_histories(symbols: tuple[str, ...], period: str = "2y") -> DataRes
             retry_count += retries
             for symbol, frame in downloaded.items():
                 merged = cache.merge(symbol, frame)
-                if len(merged) >= 50:
+                if len(merged) >= minimum_rows:
                     histories[symbol] = _trim_history(merged, period)
             missing.extend(chunk_missing)
 
@@ -971,7 +956,7 @@ def get_batch_histories(symbols: tuple[str, ...], period: str = "2y") -> DataRes
     unresolved = []
     for symbol in dict.fromkeys(missing):
         cached = cache.load(symbol)
-        if cached is not None and len(cached) >= 50:
+        if cached is not None and len(cached) >= minimum_rows:
             histories[symbol] = _trim_history(cached, period)
             stale_symbols.append(symbol)
         else:
@@ -1048,7 +1033,8 @@ def get_history(symbol: str, period: str = "1y") -> DataResult:
         history = _validate_history(
             history[["Open", "High", "Low", "Close", "Volume"]]
         )
-        if len(history) < 50:
+        minimum_rows = _minimum_history_rows(period)
+        if len(history) < minimum_rows:
             raise ValueError(f"Only {len(history)} valid observations returned")
         history = cache.merge(normalized_symbol, history)
         return DataResult(
@@ -1057,7 +1043,7 @@ def get_history(symbol: str, period: str = "1y") -> DataResult:
             retrieved_at,
         )
     except Exception as error:
-        if cached is not None and len(cached) >= 50:
+        if cached is not None and len(cached) >= _minimum_history_rows(period):
             return DataResult(
                 _trim_history(cached, period),
                 "Stale persistent Yahoo Finance cache",
@@ -1073,6 +1059,48 @@ def get_history(symbol: str, period: str = "1y") -> DataResult:
             retrieved_at,
             is_fallback=True,
             warning=f"Yahoo Finance unavailable for {symbol}: {error}",
+        )
+
+
+def refresh_history(symbol: str, period: str = "1y") -> DataResult:
+    """Refetch one symbol and atomically update its persistent history cache."""
+    retrieved_at = datetime.now(UTC)
+    normalized_symbol = symbol.upper()
+    cache = _market_history_cache()
+    minimum_rows = _minimum_history_rows(period)
+    try:
+        history = yf.Ticker(normalized_symbol).history(period=period, auto_adjust=True)
+        history = _validate_history(
+            history[["Open", "High", "Low", "Close", "Volume"]]
+        )
+        if len(history) < minimum_rows:
+            raise ValueError(f"Only {len(history)} valid observations returned")
+        merged = cache.merge(normalized_symbol, history)
+        get_history.cache_clear()
+        get_batch_histories.cache_clear()
+        return DataResult(
+            _trim_history(merged, period),
+            "Yahoo Finance focused refresh + persistent cache",
+            retrieved_at,
+        )
+    except Exception as error:
+        cached = cache.load(normalized_symbol)
+        if cached is not None and len(cached) >= minimum_rows:
+            return DataResult(
+                _trim_history(cached, period),
+                "Persistent Yahoo Finance cache",
+                retrieved_at,
+                warning=(
+                    f"Focused refresh failed for {normalized_symbol}; using "
+                    f"cached data: {error}"
+                ),
+            )
+        return DataResult(
+            _trim_history(_demo_history(normalized_symbol), period),
+            "Synthetic demonstration data",
+            retrieved_at,
+            is_fallback=True,
+            warning=f"Focused refresh failed for {normalized_symbol}: {error}",
         )
 
 

@@ -13,6 +13,12 @@ RISK_THRESHOLDS = {
     "Credit underperformance": -2.0,
     "Dollar surge": 3.0,
 }
+MOVEMENT_VALUE_COLUMNS = (
+    "Movement return %",
+    "Movement liquidity",
+    "Movement volume change %",
+    "Movement flow %",
+)
 
 
 def market_snapshot(
@@ -184,6 +190,142 @@ def industry_confirmation_snapshot(industries: pd.DataFrame) -> pd.DataFrame:
         return result
     result["Confirmation"] = result.apply(_industry_confirmation, axis=1)
     return result
+
+
+def industry_qualification_snapshot(industries: pd.DataFrame) -> pd.DataFrame:
+    """Explain industry eligibility from available movement and trend evidence."""
+    if industries.empty:
+        return industries.copy()
+    result = industries.copy()
+    criteria = (
+        ("Capital inflow", "Movement state", "Inflow", None),
+        ("Rotation score", "Rotation score", 55.0, "at least"),
+        ("Trend breadth", "Above rising SMA150 %", 50.0, "at least"),
+        ("Early rotation", "Early rotation score", 55.0, "at least"),
+    )
+
+    def evaluate(row: pd.Series) -> pd.Series:
+        matches: list[str] = []
+        failures: list[str] = []
+        unavailable: list[str] = []
+        for label, column, threshold, comparison in criteria:
+            value = row.get(column)
+            if value is None or pd.isna(value):
+                unavailable.append(label)
+                continue
+            passed = (
+                str(value) == str(threshold)
+                if comparison is None
+                else float(value) >= float(threshold)
+            )
+            evidence = (
+                f"{label}: {value} (needs {threshold})"
+                if comparison is None
+                else f"{label}: {float(value):.1f} (needs >= {threshold:g})"
+            )
+            (matches if passed else failures).append(evidence)
+        available = len(criteria) - len(unavailable)
+        return pd.Series(
+            {
+                "Industry qualified": bool(matches),
+                "Industry matches": "; ".join(matches) or "None",
+                "Industry failures": "; ".join(failures) or "None",
+                "Industry unavailable": "; ".join(unavailable) or "None",
+                "Industry evidence %": round(available / len(criteria) * 100, 1),
+            }
+        )
+
+    evidence = result.apply(evaluate, axis=1)
+    result[evidence.columns] = evidence
+    peer_columns = [
+        column for column in ("Region", "Sector") if column in result
+    ]
+    if peer_columns and "Rotation score" in result:
+        rank = result.groupby(peer_columns)["Rotation score"].rank(
+            method="min", ascending=False
+        )
+        peer_count = result.groupby(peer_columns)["Rotation score"].transform("size")
+        result["Industry peer rank"] = [
+            f"{int(position)}/{int(count)}"
+            if pd.notna(position)
+            else "Unavailable"
+            for position, count in zip(rank, peer_count, strict=True)
+        ]
+    else:
+        result["Industry peer rank"] = "Unavailable"
+    return result
+
+
+def industry_movement_changes(
+    current: pd.DataFrame, previous: pd.DataFrame
+) -> pd.DataFrame:
+    """Compare industry movement evidence with the previous successful scan."""
+    return _movement_changes(current, previous, ("Region", "Sector", "Industry"))
+
+
+def stock_movement_changes(
+    current: pd.DataFrame, previous: pd.DataFrame
+) -> pd.DataFrame:
+    """Compare stock movement evidence with the previous successful scan."""
+    return _movement_changes(current, previous, ("Symbol",))
+
+
+def _movement_changes(
+    current: pd.DataFrame,
+    previous: pd.DataFrame,
+    keys: tuple[str, ...],
+) -> pd.DataFrame:
+    if current.empty:
+        return current.copy()
+    required = {*keys, "Movement state", *MOVEMENT_VALUE_COLUMNS}
+    result = current.copy()
+    if not required.issubset(result):
+        result["Movement change"] = "Unavailable"
+        return result
+    previous_required = required.intersection(previous.columns)
+    if previous.empty or not required.issubset(previous_required):
+        result["Movement change"] = "New"
+        for column in MOVEMENT_VALUE_COLUMNS:
+            result[f"{column} change"] = float("nan")
+        return result
+
+    previous_columns = [*keys, "Movement state", *MOVEMENT_VALUE_COLUMNS]
+    renamed = previous[previous_columns].rename(
+        columns={
+            column: f"Previous {column}"
+            for column in ("Movement state", *MOVEMENT_VALUE_COLUMNS)
+        }
+    )
+    result = result.merge(
+        renamed,
+        on=list(keys),
+        how="left",
+        validate="many_to_one",
+        indicator=True,
+    )
+    for column in MOVEMENT_VALUE_COLUMNS:
+        result[f"{column} change"] = (
+            result[column] - result[f"Previous {column}"]
+        ).round(1)
+
+    def classify(row: pd.Series) -> str:
+        if row["_merge"] == "left_only":
+            return "New"
+        current_state = str(row["Movement state"])
+        previous_state = str(row["Previous Movement state"])
+        if current_state == "Inflow" and previous_state != "Inflow":
+            return "Newly strengthening"
+        if current_state == "Outflow" and previous_state != "Outflow":
+            return "Deteriorating"
+        liquidity_change = float(row["Movement liquidity change"])
+        if liquidity_change >= 10:
+            return "Strengthening"
+        if liquidity_change <= -10:
+            return "Deteriorating"
+        return "Stable"
+
+    result["Movement change"] = result.apply(classify, axis=1)
+    return result.drop(columns="_merge")
 
 
 def _industry_confirmation(row: pd.Series) -> str:

@@ -3,73 +3,24 @@
   "dashboards": [
     {
       "id": "daily-command-center",
-      "title": "Daily Command Center",
-      "description": "Market risk, regional rotation, and instrument evidence in one linked view.",
+      "title": "Flow Finder",
+      "description": "",
       "widgets": [
         {
-          "id": "market-regime",
-          "type": "market_regime",
-          "title": "Market Risk and Controls",
-          "width": 4
-        },
-        {
-          "id": "cross-asset-conditions",
-          "type": "cross_asset_conditions",
-          "title": "Cross-Asset Conditions",
-          "width": 8
-        },
-        {
-          "id": "regional-markets",
-          "type": "regional_markets",
-          "title": "Regional Markets",
+          "id": "capital-flow-workspace",
+          "type": "capital_flow_workspace",
+          "title": "Capital Flow Finder",
           "width": 12,
-          "follow_context": true
-        },
-        {
-          "id": "rotation-explorer",
-          "type": "rotation_explorer",
-          "title": "Regional, Sector, and Industry Rotation",
-          "width": 6,
-          "follow_context": true
-        },
-        {
-          "id": "liquidity-breadth",
-          "type": "liquidity_breadth",
-          "title": "Liquidity Flow and Market Breadth",
-          "width": 6,
-          "follow_context": true
-        },
-        {
-          "id": "ranked-stocks",
-          "type": "ranked_stocks",
-          "title": "Ranked Industry Stocks",
-          "width": 7,
           "follow_context": true,
           "settings": {
-            "broker_only": false
+            "hide_header": true
           }
-        },
-        {
-          "id": "instrument-analysis",
-          "type": "instrument_analysis",
-          "title": "Stock, ETF, or Index Analysis",
-          "width": 5,
-          "follow_context": true,
-          "settings": {
-            "default_symbol": "SPY"
-          }
-        },
-        {
-          "id": "rule-profile-editor",
-          "type": "rule_profile_editor",
-          "title": "Rule Profile Controls",
-          "width": 12
         }
       ]
     },
     {
       "id": "instrument-workbench",
-      "title": "Instrument Workbench",
+      "title": "Stock Detail",
       "description": "Focused technical, quality, and risk inspection for any supported symbol.",
       "widgets": [
         {
@@ -116,6 +67,16 @@
           }
         },
         {
+          "id": "security-scoreboard",
+          "type": "security_scoreboard",
+          "title": "Security Scoreboard",
+          "width": 12,
+          "follow_context": true,
+          "settings": {
+            "default_symbol": "QQQ"
+          }
+        },
+        {
           "id": "trade-plan",
           "type": "trade_plan",
           "title": "Risk and Trade Plan",
@@ -139,7 +100,7 @@
     },
     {
       "id": "portfolio-monitor",
-      "title": "Portfolio Monitor",
+      "title": "Portfolio",
       "description": "Concentration, exposure controls, and watchlist access from cached market evidence.",
       "widgets": [
         {

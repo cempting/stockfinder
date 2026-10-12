@@ -345,26 +345,11 @@ def test_industry_browser_shows_all_proxies_and_stocks_without_filters() -> None
             "Industry": ["Semiconductors", "Machinery"],
         }
     )
-    config = {
-        "regional_proxies": {
-            "United States": {
-                "benchmark": "SPY",
-                "sectors": {"Technology": "XLK"},
-                "industries": {"Semiconductors": "SMH"},
-            },
-            "Europe": {
-                "benchmark": "VGK",
-                "sectors": {"Industrials": "EXI"},
-                "industries": {},
-            },
-        }
-    }
-
-    browser = _industry_browser_frame(industries, candidates, config)
+    browser = _industry_browser_frame(industries, candidates)
     visible = _filter_industry_browser(browser)
     stocks = _stocks_for_industries(candidates, visible)
 
-    assert visible["ETF / proxy"].tolist() == ["SMH", "EXI"]
+    assert visible["ETF / proxy"].tolist() == ["SMH", "AIRR"]
     assert visible["Stocks"].tolist() == [1, 1]
     assert stocks["Symbol"].tolist() == ["CHIP", "GEAR"]
 
@@ -641,17 +626,17 @@ def test_gettex_availability_is_unverified_without_import(monkeypatch) -> None:
     assert enriched.iloc[0]["GETTEX"] == "Not verified"
 
 
-def test_industry_proxy_prefers_industry_etf_then_sector_fallback() -> None:
+def test_industry_proxy_prefers_dedicated_catalog_then_sector_fallback() -> None:
     exact = pd.Series(
         {"Industry": "Semiconductors", "Sector": "Information Technology"}
     )
     fallback = pd.Series({"Industry": "Unknown energy", "Sector": "Energy"})
 
-    assert _industry_proxy(exact) == ("SMH", "regional industry proxy")
-    assert _industry_proxy(fallback) == ("XLE", "regional sector proxy")
+    assert _industry_proxy(exact) == ("SMH", "dedicated industry ETF/index")
+    assert _industry_proxy(fallback) == ("XLE", "regional sector ETF/index")
 
 
-def test_industry_proxy_uses_listing_region_for_domicile_group() -> None:
+def test_industry_proxy_uses_dedicated_catalog_across_regions() -> None:
     row = pd.Series(
         {
             "Region": "Germany",
@@ -661,7 +646,7 @@ def test_industry_proxy_uses_listing_region_for_domicile_group() -> None:
         }
     )
 
-    assert _industry_proxy(row) == ("VGK", "regional benchmark fallback")
+    assert _industry_proxy(row) == ("AIRR", "dedicated industry ETF/index")
 
 
 def test_industry_proxy_thumbnail_is_compact_and_selectable() -> None:

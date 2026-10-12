@@ -19,11 +19,16 @@ from stockfinder.analysis import (
     classify_rotation_state,
 )
 from stockfinder.data import DataResult, get_batch_histories, get_global_universe
-from stockfinder.infrastructure.config import AnalysisConfigStore, geography_column
+from stockfinder.infrastructure.config import (
+    AnalysisConfigStore,
+    capital_movement_sessions,
+    configured_capital_movement,
+    geography_column,
+)
 from stockfinder.infrastructure.runtime import application_data_dir
 from stockfinder.infrastructure.storage import ScanSnapshot, ScanSnapshotStore
 
-MARKET_SCAN_VERSION = "2026-09-promising-evidence-v12"
+MARKET_SCAN_VERSION = "2026-10-split-flow-workspace-v14"
 ProgressCallback = Callable[[str, int, int, int], None]
 
 
@@ -100,7 +105,17 @@ def refresh_market_scan(
         )
 
     _notify(progress, "Aggregating sectors and industries", 0, 0, len(histories))
-    sectors, industries = broad_rotation_scan(universe_result.data, histories)
+    movement = configured_capital_movement(config)
+    movement_sessions = capital_movement_sessions(config)
+    movement_label = str(movement["period"])
+    if movement_label == "Custom":
+        movement_label = f"Custom ({movement_sessions}s)"
+    sectors, industries = broad_rotation_scan(
+        universe_result.data,
+        histories,
+        movement_sessions=movement_sessions,
+        movement_label=movement_label,
+    )
     industries = ensure_rotation_columns(industries)
     industry_groups = set(
         industries[["Region", "Sector", "Industry"]].itertuples(
@@ -109,7 +124,11 @@ def refresh_market_scan(
     )
     _notify(progress, "Building stock candidates", 0, 0, len(histories))
     candidates = breakout_candidates(
-        universe_result.data, histories, industry_groups
+        universe_result.data,
+        histories,
+        industry_groups,
+        movement_sessions=movement_sessions,
+        movement_label=movement_label,
     )
     _notify(progress, "Building risk profiles", 0, 0, len(histories))
     risk_profiles = build_market_risk_profiles(histories)
@@ -138,8 +157,14 @@ def refresh_market_scan(
 
 
 def market_scan_model_version(config: dict) -> str:
-    """Return the scan version including its configured geography dimension."""
-    return f"{MARKET_SCAN_VERSION}-{config['geography_dimension']}"
+    """Return the scan version including settings that alter persisted results."""
+    movement = configured_capital_movement(config)
+    movement_sessions = capital_movement_sessions(config)
+    movement_period = str(movement["period"]).lower()
+    return (
+        f"{MARKET_SCAN_VERSION}-{config['geography_dimension']}"
+        f"-movement-{movement_period}-{movement_sessions}s"
+    )
 
 
 def apply_geography_dimension(

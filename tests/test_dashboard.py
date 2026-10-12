@@ -10,8 +10,19 @@ from stockfinder.presentation.dashboard_renderer import _widget_rows
 from stockfinder.presentation.navigation import AnalysisContext
 from stockfinder.presentation.widget_registry import WidgetRegistry
 from stockfinder.widgets import built_in_widget_registry
+from stockfinder.widgets.capital_flow_workspace import (
+    CHART_PERIODS,
+    _flow_chart,
+    filter_flow_evidence,
+    industry_score_fields,
+    order_flow_evidence,
+    stock_score_fields,
+)
 from stockfinder.widgets.instrument_analysis import _instrument_figure
-from stockfinder.widgets.rotation_explorer import _ordered_groups
+from stockfinder.widgets.rotation_explorer import (
+    _filter_movement_state,
+    _ordered_groups,
+)
 
 
 def test_default_dashboards_define_multiple_widget_compositions() -> None:
@@ -23,20 +34,14 @@ def test_default_dashboards_define_multiple_widget_compositions() -> None:
         "portfolio-monitor",
     ]
     assert [widget.widget_type for widget in dashboards[0].widgets] == [
-        "market_regime",
-        "cross_asset_conditions",
-        "regional_markets",
-        "rotation_explorer",
-        "liquidity_breadth",
-        "ranked_stocks",
-        "instrument_analysis",
-        "rule_profile_editor",
+        "capital_flow_workspace",
     ]
     assert [widget.widget_type for widget in dashboards[1].widgets] == [
         "instrument_analysis",
         "security_score_evidence",
         "security_score_evidence",
         "security_score_evidence",
+        "security_scoreboard",
         "trade_plan",
         "peer_comparison",
     ]
@@ -135,6 +140,7 @@ def test_built_in_registry_supports_default_dashboards() -> None:
 
     assert registry.widget_types == (
         "alert_center",
+        "capital_flow_workspace",
         "market_regime",
         "cross_asset_conditions",
         "regional_markets",
@@ -144,6 +150,7 @@ def test_built_in_registry_supports_default_dashboards() -> None:
         "instrument_analysis",
         "rule_profile_editor",
         "security_score_evidence",
+        "security_scoreboard",
         "peer_comparison",
         "trade_plan",
         "portfolio_exposure",
@@ -173,16 +180,13 @@ def test_dashboard_renderer_groups_widgets_into_twelve_column_rows() -> None:
     rows = _widget_rows(widgets)
 
     assert [[widget.width for widget in row] for row in rows] == [
-        [4, 8],
-        [12],
-        [6, 6],
-        [7, 5],
         [12],
     ]
     workbench_rows = _widget_rows(load_dashboards()[1].widgets)
     assert [[widget.width for widget in row] for row in workbench_rows] == [
         [12],
         [4, 4, 4],
+        [12],
         [12],
         [12],
     ]
@@ -208,3 +212,126 @@ def test_rotation_context_options_are_ordered_by_strongest_group() -> None:
     )
 
     assert _ordered_groups(frame, "Region") == ["Europe", "Asia"]
+
+
+def test_flow_workspace_filters_direction_and_patterns() -> None:
+    import pandas as pd
+
+    frame = pd.DataFrame(
+        {
+            "Industry": ["Winner", "Weak", "Breakout"],
+            "Movement state": ["Inflow", "Outflow", "Inflow"],
+            "Movement liquidity": [80.0, 20.0, 70.0],
+            "Pattern breakout": [False, False, True],
+        }
+    )
+
+    filtered = filter_flow_evidence(
+        frame,
+        direction="Inflow",
+        patterns=("Breakout",),
+        entity="industry",
+    )
+    outflows = order_flow_evidence(
+        filter_flow_evidence(
+            frame,
+            direction="Outflow",
+            patterns=(),
+            entity="industry",
+        ),
+        "Outflow",
+    )
+
+    assert filtered["Industry"].tolist() == ["Breakout"]
+    assert outflows["Industry"].tolist() == ["Weak"]
+
+
+def test_industry_overview_formats_scores_beside_charts() -> None:
+    import pandas as pd
+
+    fields = industry_score_fields(
+        pd.Series(
+            {
+                "Movement flow %": 12.34,
+                "Movement liquidity": 76.0,
+                "Rotation score": 68.0,
+                "Above rising SMA150 %": 55.0,
+                "Pattern volume ratio": 1.75,
+            }
+        )
+    )
+
+    assert fields == {
+        "Flow": "+12.3%",
+        "Liquidity": "7.6/10",
+        "Trend": "6.8/10",
+        "Breadth": "55%",
+        "Volume": "1.8x",
+    }
+
+
+def test_stock_overview_formats_scores_beside_charts() -> None:
+    import pandas as pd
+
+    fields = stock_score_fields(
+        pd.Series(
+            {
+                "Opportunity score": 82.0,
+                "Movement flow %": 12.34,
+                "Movement liquidity": 76.0,
+                "Stock peer rank": "3/12",
+                "Volume Evidence": True,
+            }
+        )
+    )
+
+    assert fields == {
+        "Score": "8.2/10",
+        "Flow": "+12.3%",
+        "Liquidity": "7.6/10",
+        "Peer": "3/12",
+        "Volume": "Yes",
+    }
+
+
+def test_flow_workspace_chart_ranges_map_to_live_history_periods() -> None:
+    assert CHART_PERIODS == {
+        "1W": "5d",
+        "1M": "1mo",
+        "3M": "3mo",
+        "6M": "6mo",
+        "1Y": "1y",
+        "2Y": "2y",
+    }
+
+
+def test_flow_workspace_stock_chart_keeps_two_year_history() -> None:
+    import pandas as pd
+
+    dates = pd.bdate_range("2024-01-01", periods=528)
+    history = pd.DataFrame(
+        {"Close": range(100, 628), "Volume": range(1_000, 1_528)},
+        index=dates,
+    )
+
+    figure = _flow_chart(history, "TEST")
+
+    assert len(figure.data[0].x) == 528
+
+
+def test_capital_movement_state_filter_preserves_unknown_legacy_data() -> None:
+    import pandas as pd
+
+    frame = pd.DataFrame(
+        {
+            "Industry": ["Software", "Banks", "Energy"],
+            "Movement state": ["Inflow", "Mixed", "Outflow"],
+        }
+    )
+
+    assert _filter_movement_state(frame, "Inflow")["Industry"].tolist() == [
+        "Software"
+    ]
+    assert len(_filter_movement_state(frame, "All")) == 3
+    legacy = frame.drop(columns="Movement state")
+    assert len(_filter_movement_state(legacy, "Inflow")) == 3

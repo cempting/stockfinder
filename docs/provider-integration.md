@@ -9,8 +9,15 @@ records when no adapter is installed.
 Adapters may implement any subset of these `ProviderCapability` values:
 
 - `macro_events`
+- `macro_series`
 - `news_sentiment`
+- `social_sentiment`
+- `fund_flows`
 - `institutional_flows`
+- `company_estimates`
+- `insider_transactions`
+- `options_activity`
+- `block_activity`
 - `constituents`
 
 Each response must be a `DataResult` containing a pandas DataFrame, source label,
@@ -22,6 +29,13 @@ Institutional-flow adapters should identify the evidence accurately. Regulatory
 holdings such as SEC Form 13F are delayed position disclosures, not real-time
 institutional transactions. News sentiment must retain the original headline,
 timestamp, symbol, and source URL.
+
+Reported fund flows remain separate from price-volume accumulation inference.
+Social adapters must report entity-resolution confidence, unique-author breadth,
+and platform identity; unresolved cashtags are not evidence. Macro series retain
+available-at time and vintage for look-ahead-safe replay. Estimates, insider,
+options, and block records retain their observation or filing timestamps and
+must not be relabeled as confirmed future returns or actor intent.
 
 ## Adapter Contract
 

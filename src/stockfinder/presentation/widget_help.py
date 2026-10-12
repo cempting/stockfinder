@@ -5,6 +5,32 @@ from stockfinder.presentation.dashboard import WidgetSpec
 SECTIONS = ("**Data origin**", "**Calculation**", "**Criteria**", "**Limitations**")
 
 WIDGET_HELP = {
+    "capital_flow_workspace": """
+**Data origin**
+
+The latest compatible market scan supplies equal-weight industry evidence and
+constituent stock evidence. Charts use the configured industry, sector, or
+regional proxy and daily market history.
+
+**Calculation**
+
+Money flow combines active-period return, directional dollar volume, and
+liquidity evidence. Industry patterns use aggregate member closes and volume:
+20-session consolidation, closing breakout, SMA50/SMA150 position, and positive
+1.5x volume expansion. Stock patterns use the existing OHLCV setup analysis.
+
+**Criteria**
+
+Inflow and Outflow are symmetric filters. Selected patterns are combined with
+AND logic. Stocks remain eligible according to the selected Swing or Position
+rule profile and are ordered by the transparent Opportunity score.
+
+**Limitations**
+
+Price-volume behavior is inferred accumulation or distribution, not identified
+actor intent. An industry chart may use a sector or regional fallback when no
+dedicated industry proxy is configured; the fallback role is displayed.
+""",
     "market_regime": """
 **Data origin**
 
@@ -61,9 +87,9 @@ subscriptions, futures positioning, or institutional transactions.
     "regional_markets": """
 **Data origin**
 
-Configured regional ETF/index symbols from `regional_proxies`, one year of daily
+Regional ETF/index benchmarks from `market_sources.json`, one year of daily
 history for each benchmark, and industry internals from the latest completed broad
-scan. The configured Global benchmark, normally ACWI, is the relative baseline.
+scan. The catalog's Global benchmark, normally ACWI, is the relative baseline.
 
 **Calculation**
 
@@ -92,13 +118,18 @@ grouped by configured region, sector, and industry in the latest scan.
 
 **Calculation**
 
-Industry returns use 5, 21, 63, and 126 sessions. Liquidity combines normalized
-dollar-volume change (-30% to +50%) and directional dollar-volume balance (-20%
-to +20%). Rotation score is the mean of normalized multi-horizon momentum,
-liquidity composite, and member breadth above a rising SMA150. Sector values are
-member-weighted industry aggregates. Early rotation equally weights SMA20 breadth
-acceleration, relative-strength inflection, positive dollar volume, and close
-location pressure.
+The active capital-movement period defaults to one completed trading session and
+can be changed to 5, 21, or a custom number of sessions. Active dollar volume is
+compared with the immediately preceding equal window. Up-day minus down-day
+dollar volume divided by the directional total produces active flow balance.
+Inflow requires positive return and flow; Outflow requires both negative.
+
+The separate rotation model retains 5, 21, 63, and 126-session evidence.
+Liquidity combines normalized dollar-volume change (-30% to +50%) and directional
+dollar-volume balance (-20% to +20%). Rotation score is the mean of normalized
+multi-horizon momentum, liquidity composite, and member breadth above a rising
+SMA150. Early rotation equally weights SMA20 breadth acceleration,
+relative-strength inflection, positive dollar volume, and close location pressure.
 
 **Criteria**
 
@@ -112,8 +143,11 @@ Building requires 55 with two confirmations.
 
 **Limitations**
 
-Directional flow is inferred from price and volume. Small groups are explicitly
-labeled Thin leadership and are not equivalent to broad industry participation.
+Active and multi-horizon directional flow are inferred from end-of-day price and
+volume; they do not identify market participants or measure reported fund flows.
+Daily means the latest completed session, not live intraday activity. Small groups
+are explicitly labeled Thin leadership and are not equivalent to broad industry
+participation.
 """,
     "liquidity_breadth": """
 **Data origin**
@@ -148,20 +182,32 @@ optional user-imported broker symbol list.
 
 **Calculation**
 
-Hard gates evaluate setup score, annualized volatility, safety (`100 - observed
-risk`), optional SMA150 trend, available fundamental quality, and broker status.
+Setup qualification uses independently enabled heartbeat consolidation, recent
+SMA50 cross, rising SMA50, increasing volume, and above-SMA150 families under an
+editable Any or All policy. The table reports matches, misses, and available
+setup-evidence percentage. Separate hard gates evaluate annualized volatility,
+safety (`100 - observed risk`), optional SMA150 trend, available fundamental
+quality, and broker status.
 The weighted profile score combines setup, safety, fundamentals, and binary
 SMA150 trend using editable weights; missing components are reweighted and the
-available-weight percentage is shown as Evidence coverage.
+available-weight percentage is shown as Evidence coverage. Capital-movement
+columns use the same active completed-session period selected in Industry Capital
+Movement and remain separate from setup qualification.
 
 **Criteria**
 
-Thresholds come from Swing, Position, or Investing configuration. Missing setup
-or volatility fails its hard gate; missing SMA150 fails when required. Missing
+Thresholds and enabled setups come from Swing, Position, or Investing
+configuration. No enabled setup match fails qualification; unavailable setup
+evidence remains visible. Missing volatility fails its hard gate; missing SMA150
+fails when required. Missing
 fundamental or safety evidence is not invented. The weighted minimum is enforced
 only when explicitly enabled. Broker-only mode requires an exact normalized symbol
-match. Ranking can use setup, weighted score, safety, SMA50 distance, base length,
-SMA50 slope, or volume-interest ratio.
+match. The default opportunity rank weights setup evidence at 70%, constructive
+base maturity at 15%, and positive 1.5x-volume recency at 15%. Base maturity and
+volume recency both cap at 20 sessions; missing components reduce displayed rank
+completeness. Ranking can also use setup, weighted score, safety, SMA50 distance,
+base length,
+SMA50 slope, volume-interest ratio, or active capital-movement liquidity.
 
 **Limitations**
 
@@ -194,6 +240,31 @@ history needs at least 50 sessions; SMA150 components require at least 150.
 
 Missing inputs lower completeness. Provider fallback status and source are shown;
 quality, safety, and technical evidence remain independent rather than one rating.
+""",
+    "security_scoreboard": """
+**Data origin**
+
+Cached/refreshed company profile fields and two years of adjusted daily OHLCV
+history for the selected instrument.
+
+**Calculation**
+
+Reported growth, quality, cash-flow, balance-sheet, valuation, forward/event,
+and jurisdiction fields remain separate from calculated realized volatility,
+drawdown, ATR percentage, and 20-session average dollar volume. Each row carries
+an evidence type and availability state.
+
+**Criteria**
+
+The scoreboard does not collapse heterogeneous evidence into one recommendation.
+Unavailable values remain unavailable. Analyst targets and recommendations are
+identified as opinions.
+
+**Limitations**
+
+Coverage depends on the installed profile provider. Estimate revisions, guidance,
+country risk, spreads, and event classifications require typed external evidence
+and are not inferred when absent.
 """,
     "security_score_evidence": """
 **Data origin**

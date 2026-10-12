@@ -231,24 +231,31 @@ class ScanSnapshotStore:
             if self.path.exists():
                 self.path.replace(backup)
             temporary.replace(self.path)
-            if backup.exists():
-                shutil.rmtree(backup)
         finally:
             if temporary.exists():
                 shutil.rmtree(temporary)
 
     def load(self) -> ScanSnapshot | None:
-        metadata_path = self.path / "metadata.json"
+        return self._load_from(self.path)
+
+    def load_previous(self) -> ScanSnapshot | None:
+        """Load the successful snapshot replaced by the latest save."""
+        backup = self.path.with_name(f"{self.path.name}.previous")
+        return self._load_from(backup)
+
+    @staticmethod
+    def _load_from(path: Path) -> ScanSnapshot | None:
+        metadata_path = path / "metadata.json"
         if not metadata_path.exists():
             return None
         try:
             metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-            risk_path = self.path / "risk_profiles.parquet"
+            risk_path = path / "risk_profiles.parquet"
             return ScanSnapshot(
-                universe=pd.read_parquet(self.path / "universe.parquet"),
-                sectors=pd.read_parquet(self.path / "sectors.parquet"),
-                industries=pd.read_parquet(self.path / "industries.parquet"),
-                candidates=pd.read_parquet(self.path / "candidates.parquet"),
+                universe=pd.read_parquet(path / "universe.parquet"),
+                sectors=pd.read_parquet(path / "sectors.parquet"),
+                industries=pd.read_parquet(path / "industries.parquet"),
+                candidates=pd.read_parquet(path / "candidates.parquet"),
                 completed_at=datetime.fromisoformat(metadata["completed_at"]),
                 source=metadata["source"],
                 coverage=float(metadata["coverage"]),
@@ -295,6 +302,16 @@ class Repository:
                     currency TEXT NOT NULL DEFAULT 'USD',
                     entry_date TEXT,
                     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE TABLE IF NOT EXISTS decision_snapshots (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    symbol TEXT NOT NULL,
+                    decision TEXT NOT NULL,
+                    profile TEXT NOT NULL,
+                    notes TEXT NOT NULL DEFAULT '',
+                    rejection_reason TEXT NOT NULL DEFAULT '',
+                    evidence_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );
                 """
             )
@@ -380,3 +397,47 @@ class Repository:
             return pd.read_sql_query(
                 "SELECT * FROM positions ORDER BY updated_at DESC", connection
             )
+
+    def save_decision_snapshot(
+        self,
+        symbol: str,
+        decision: str,
+        profile: str,
+        notes: str,
+        rejection_reason: str,
+        evidence: dict[str, object],
+    ) -> int:
+        """Append one immutable decision and its reproducible evidence payload."""
+        if not symbol.strip() or not decision.strip() or not profile.strip():
+            raise ValueError("symbol, decision, and profile must not be empty")
+        payload = json.dumps(evidence, sort_keys=True, default=str)
+        with closing(self._connect()) as connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO decision_snapshots
+                    (symbol, decision, profile, notes, rejection_reason,
+                     evidence_json)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    symbol.upper(),
+                    decision,
+                    profile,
+                    notes,
+                    rejection_reason,
+                    payload,
+                ),
+            )
+            connection.commit()
+            return int(cursor.lastrowid)
+
+    def decision_snapshots(self, symbol: str | None = None) -> pd.DataFrame:
+        """Return immutable decisions newest first, optionally for one symbol."""
+        query = "SELECT * FROM decision_snapshots"
+        parameters: tuple[str, ...] = ()
+        if symbol:
+            query += " WHERE symbol = ?"
+            parameters = (symbol.upper(),)
+        query += " ORDER BY id DESC"
+        with closing(self._connect()) as connection:
+            return pd.read_sql_query(query, connection, params=parameters)

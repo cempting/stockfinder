@@ -10,6 +10,7 @@ from stockfinder.analysis import AnalysisResult
 from stockfinder.data import DataResult
 
 ScanResult = tuple[DataResult, Any, Any, Any, str | None]
+PreviousScanResult = tuple[pd.DataFrame, pd.DataFrame]
 
 
 @dataclass(frozen=True)
@@ -17,8 +18,10 @@ class DashboardServices:
     """Explicit service boundary between widgets and the application shell."""
 
     get_history: Callable[[str, str], DataResult]
+    refresh_history: Callable[[str, str], DataResult]
     analyze_security: Callable[[str], AnalysisResult]
     load_scan: Callable[[str], ScanResult]
+    get_previous_scan: Callable[[], PreviousScanResult]
     get_analysis_config: Callable[[], dict[str, Any]]
     save_analysis_config: Callable[[dict[str, Any]], dict[str, Any]]
     get_broker_symbols: Callable[[], set[str]]
@@ -26,11 +29,15 @@ class DashboardServices:
     get_candidate_fundamentals: Callable[[tuple[str, ...]], pd.DataFrame]
     get_positions: Callable[[], pd.DataFrame]
     get_watchlist: Callable[[], pd.DataFrame]
+    get_decision_snapshots: Callable[[str | None], pd.DataFrame]
     save_position: Callable[[str, float, float, str, str], None]
     delete_position: Callable[[str], None]
     save_watchlist: Callable[
         [str, str, float | None, float | None, float | None], None
     ]
     delete_watchlist: Callable[[str], None]
+    save_decision_snapshot: Callable[
+        [str, str, str, str, str, dict[str, object]], int
+    ]
     get_active_rule_profile: Callable[[], str]
     load_mode: str

@@ -4,6 +4,7 @@ import streamlit as st
 
 from stockfinder.infrastructure.config import (
     PROFILE_COMPOSITION_PRESETS,
+    SETUP_FILTERS,
     apply_profile_composition_preset,
     configured_rule_profile,
     update_rule_profile,
@@ -42,6 +43,18 @@ def render_rule_profile_editor(
         services.save_analysis_config(updated)
         st.rerun()
     with st.form(f"{spec.widget_id}_form"):
+        st.markdown("**Setup qualification**")
+        setup_match_mode = st.segmented_control(
+            "Enabled setups must match",
+            ("any", "all"),
+            default=str(profile["setup_match_mode"]),
+        ) or str(profile["setup_match_mode"])
+        enabled_setup_filters = st.multiselect(
+            "Active setup families",
+            tuple(SETUP_FILTERS),
+            default=list(profile["enabled_setup_filters"]),
+            format_func=lambda filter_id: SETUP_FILTERS[filter_id],
+        )
         setup, volatility = st.columns(2)
         minimum_setup = setup.number_input(
             "Minimum setup score",
@@ -130,6 +143,8 @@ def render_rule_profile_editor(
                     "minimum_safety_score": minimum_safety,
                     "minimum_fundamental_score": minimum_fundamental,
                     "require_above_sma150": require_sma150,
+                    "setup_match_mode": setup_match_mode,
+                    "enabled_setup_filters": enabled_setup_filters,
                     "weighted_score_enabled": weighted_enabled,
                     "minimum_weighted_score": weighted_minimum,
                     "setup_weight": setup_weight_value,

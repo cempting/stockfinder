@@ -206,3 +206,85 @@ def render_trade_plan(
         f"{plan.risk_limited_shares:,} shares · cash limit "
         f"{plan.capital_limited_shares:,} shares"
     )
+    with st.expander("Save decision snapshot"):
+        decision = st.segmented_control(
+            "Decision",
+            ("Watchlist", "Planned", "Rejected"),
+            default="Planned",
+            key=f"{spec.widget_id}_{symbol}_decision",
+        ) or "Planned"
+        notes = st.text_area(
+            "Thesis or notes",
+            key=f"{spec.widget_id}_{symbol}_decision_notes",
+        )
+        rejection_reason = ""
+        if decision == "Rejected":
+            rejection_reason = st.text_input(
+                "Rejection reason",
+                key=f"{spec.widget_id}_{symbol}_rejection_reason",
+            )
+        if st.button(
+            "Save snapshot",
+            icon=":material/archive:",
+            type="primary",
+            key=f"{spec.widget_id}_{symbol}_save_decision",
+        ):
+            active_profile = services.get_active_rule_profile()
+            analysis_config = services.get_analysis_config()
+            snapshot_id = services.save_decision_snapshot(
+                symbol,
+                decision,
+                active_profile,
+                notes,
+                rejection_reason,
+                {
+                    "dsl": "stockfinder/v1",
+                    "analysis_config_version": analysis_config["version"],
+                    "profile_settings": analysis_config["rule_profiles"].get(
+                        active_profile, {}
+                    ),
+                    "sources": {
+                        "history": result.history.source,
+                        "history_retrieved_at": result.history.retrieved_at.isoformat(),
+                        "profile": result.profile.source,
+                        "profile_retrieved_at": result.profile.retrieved_at.isoformat(),
+                    },
+                    "setup": {
+                        "state": setup.state,
+                        "score": setup.score,
+                        "checks": setup.checks,
+                        "metrics": setup.metrics,
+                        "pivot": setup.pivot,
+                    },
+                    "risk_posture": risk_profile,
+                    "stop_candidates": stop_levels,
+                    "plan": {
+                        "entry": entry_price,
+                        "stop": stop_price,
+                        "stop_method": selected_stop_method,
+                        "target": target_price,
+                        "target_method": target_method,
+                        "shares": plan.shares,
+                        "planned_loss": plan.planned_loss,
+                        "position_value": plan.position_value,
+                        "reward_risk": reward_risk,
+                    },
+                },
+            )
+            st.success(f"Saved immutable decision snapshot #{snapshot_id}.")
+
+        history = services.get_decision_snapshots(symbol)
+        if not history.empty:
+            st.dataframe(
+                history[
+                    [
+                        "created_at",
+                        "decision",
+                        "profile",
+                        "notes",
+                        "rejection_reason",
+                    ]
+                ].head(10),
+                hide_index=True,
+                width="stretch",
+            )

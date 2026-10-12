@@ -33,8 +33,15 @@ from stockfinder.data import (
     get_history,
     get_news,
     get_profile,
+    refresh_history,
 )
-from stockfinder.infrastructure.config import AnalysisConfigStore, configured_proxy
+from stockfinder.infrastructure.config import AnalysisConfigStore
+from stockfinder.infrastructure.market_sources import (
+    load_market_sources,
+    representative_industry_symbols,
+    resolve_industry_source,
+    resolve_market_proxy,
+)
 from stockfinder.infrastructure.runtime import application_data_dir
 from stockfinder.infrastructure.storage import (
     GettexInstrumentStore,
@@ -150,10 +157,19 @@ def cached_broad_universe(day_key: str, refresh_token: int) -> DataResult:
 
 @st.cache_data(ttl=60 * 60 * 24, show_spinner=False)
 def cached_history_chunk(
-    symbols: tuple[str, ...], period: str, refresh_token: int
+    symbols: tuple[str, ...],
+    period: str,
+    refresh_token: int,
+    force_refresh: bool = False,
 ) -> DataResult:
     del refresh_token
-    return get_batch_histories(symbols, period)
+    return get_batch_histories(symbols, period, force_refresh=force_refresh)
+
+
+def _refresh_dashboard_history(symbol: str, period: str) -> DataResult:
+    result = refresh_history(symbol, period)
+    cached_analysis.clear()
+    return result
 
 
 def main() -> None:
@@ -285,7 +301,9 @@ def _dashboard_page(load_mode: str) -> None:
     registry.validate(dashboards)
     dashboard_names = {dashboard.title: dashboard for dashboard in dashboards}
 
-    _heading("Command center", "Configurable, linked market-analysis widgets")
+    requested_dashboard = st.session_state.pop("requested_dashboard", None)
+    if requested_dashboard in dashboard_names:
+        st.session_state["active_dashboard"] = requested_dashboard
     if st.session_state.get("active_dashboard") not in dashboard_names:
         st.session_state["active_dashboard"] = next(iter(dashboard_names))
     selected_name = st.segmented_control(
@@ -297,13 +315,19 @@ def _dashboard_page(load_mode: str) -> None:
     )
     dashboard = dashboard_names[selected_name]
     context = AnalysisContext(st.session_state)
-    if context.breadcrumb() and st.button("Clear analysis context"):
+    if (
+        selected_name != "Flow Finder"
+        and context.breadcrumb()
+        and st.button("Clear analysis context")
+    ):
         context.select("region", None)
         st.rerun()
     services = DashboardServices(
         get_history=get_history,
+        refresh_history=_refresh_dashboard_history,
         analyze_security=cached_analysis,
         load_scan=_load_scan,
+        get_previous_scan=_previous_scan_frames,
         get_analysis_config=analysis_config_store().load,
         save_analysis_config=analysis_config_store().save,
         get_broker_symbols=lambda: set(
@@ -313,10 +337,12 @@ def _dashboard_page(load_mode: str) -> None:
         get_candidate_fundamentals=cached_candidate_fundamentals,
         get_positions=repository().positions,
         get_watchlist=repository().watchlist,
+        get_decision_snapshots=repository().decision_snapshots,
         save_position=repository().save_position,
         delete_position=repository().delete_position,
         save_watchlist=repository().save_watchlist,
         delete_watchlist=repository().delete_watchlist,
+        save_decision_snapshot=repository().save_decision_snapshot,
         get_active_rule_profile=lambda: str(
             st.session_state.get("active_rule_profile", "Swing")
         ),
@@ -913,6 +939,7 @@ def _load_scan(
     config = analysis_config_store().load()
     scan_model_version = market_scan_model_version(config)
     refresh_token = st.session_state.get("market_refresh_token", 0)
+    force_refresh = bool(st.session_state.get("force_market_refresh", False))
     result_key = (
         f"broad_scan_result_{date.today().isoformat()}_{load_mode}_"
         f"{scan_model_version}_{refresh_token}"
@@ -981,7 +1008,10 @@ def _load_scan(
                 (as_of or date.today()).isoformat(), refresh_token
             ),
             history_loader=lambda symbols, period: cached_history_chunk(
-                symbols, period, refresh_token
+                symbols,
+                period,
+                refresh_token,
+                force_refresh,
             ),
             progress=report,
         )
@@ -1034,6 +1064,17 @@ def _cached_risk_profiles() -> pd.DataFrame:
         return pd.DataFrame()
     st.session_state["scan_risk_profiles"] = snapshot.risk_profiles
     return snapshot.risk_profiles
+
+
+def _previous_scan_frames() -> tuple[pd.DataFrame, pd.DataFrame]:
+    previous = scan_snapshot_store().load_previous()
+    config = analysis_config_store().load()
+    if (
+        previous is None
+        or previous.model_version != market_scan_model_version(config)
+    ):
+        return pd.DataFrame(), pd.DataFrame()
+    return previous.industries, previous.candidates
 
 
 def _market_page(load_mode: str) -> None:
@@ -1344,11 +1385,10 @@ def _industry_option_label(row: pd.Series) -> str:
 
 
 def _industry_proxy(row: pd.Series) -> tuple[str, str]:
-    config = analysis_config_store().load()
     region = str(row.get("Listing region", row.get("Region", "United States")))
     industry = str(row["Industry"])
     sector = str(row["Sector"])
-    return configured_proxy(config, region, sector, industry)
+    return resolve_market_proxy(region, sector, industry)
 
 
 def _industry_proxy_figure(
@@ -1554,7 +1594,6 @@ def _industry_proxy_gallery(
 def _industry_browser_frame(
     industries: pd.DataFrame,
     candidates: pd.DataFrame,
-    config: dict[str, Any],
 ) -> pd.DataFrame:
     """Build one row per regional industry with its configured tradable proxy."""
     frame = industries.copy()
@@ -1569,17 +1608,20 @@ def _industry_browser_frame(
     )
     frame = frame.join(stock_counts, on=["Region", "Sector", "Industry"])
     frame["Stocks"] = frame["Stocks"].fillna(0).astype(int)
+    representatives = representative_industry_symbols(candidates)
     proxies = frame.apply(
-        lambda row: configured_proxy(
-            config,
+        lambda row: resolve_industry_source(
             str(row.get("Listing region", row["Region"])),
             str(row["Sector"]),
             str(row["Industry"]),
+            representatives,
         ),
         axis=1,
     )
-    frame["ETF / proxy"] = proxies.map(lambda value: value[0])
-    frame["Proxy scope"] = proxies.map(lambda value: value[1])
+    frame["ETF / proxy"] = proxies.map(lambda value: value[0] if value else pd.NA)
+    frame["Proxy scope"] = proxies.map(
+        lambda value: value[1] if value else "Unavailable"
+    )
     return frame
 
 
@@ -1651,9 +1693,8 @@ def _filter_industry_stocks(
 def _sector_page(load_mode: str) -> None:
     _heading(
         "Industries",
-        "Browse every industry ETF and stock; apply filters only when useful",
+        "Browse every industry and its reviewed proxy; apply filters only when useful",
     )
-    config = analysis_config_store().load()
     _, _, industries, candidates, history_warning = _load_scan(load_mode)
     _scan_freshness_notice()
     _scan_coverage_warning(history_warning)
@@ -1661,7 +1702,7 @@ def _sector_page(load_mode: str) -> None:
         st.info("No industry data is available.")
         return
 
-    browser = _industry_browser_frame(industries, candidates, config)
+    browser = _industry_browser_frame(industries, candidates)
     st.subheader("1. Filter the universe (optional)")
     st.caption("Leave every control empty to see the complete cached universe.")
     search = st.text_input(
@@ -2718,7 +2759,7 @@ def _score_context(value: float, risk: bool = False, concise: bool = False) -> s
 def _settings_page() -> None:
     _heading(
         "Analysis settings",
-        "Regional mappings, market controls, and rule profiles",
+        "Geography, market controls, and rule profiles",
     )
     store = analysis_config_store()
     config = store.load()
@@ -2819,32 +2860,17 @@ def _settings_page() -> None:
         store.save(config)
         st.success("Saved market control bands.")
 
-    st.subheader("Regional ETF and index proxies")
-    region = st.selectbox("Region mapping", tuple(config["regional_proxies"]))
-    mapping = config["regional_proxies"][region]
-    with st.form("regional_proxy_editor"):
-        benchmark = st.text_input("Regional benchmark", value=mapping["benchmark"])
-        sectors_json = st.text_area(
-            "Sector mappings (JSON)",
-            value=json.dumps(mapping.get("sectors", {}), indent=2, sort_keys=True),
-            height=180,
-        )
-        industries_json = st.text_area(
-            "Industry mappings (JSON)",
-            value=json.dumps(mapping.get("industries", {}), indent=2, sort_keys=True),
-            height=220,
-        )
-        if st.form_submit_button("Save regional proxies", type="primary"):
-            try:
-                config["regional_proxies"][region] = {
-                    "benchmark": benchmark.strip().upper(),
-                    "sectors": json.loads(sectors_json),
-                    "industries": json.loads(industries_json),
-                }
-                store.save(config)
-                st.success(f"Saved {region} proxy mappings.")
-            except (json.JSONDecodeError, ValueError) as error:
-                st.error(str(error))
+    st.subheader("Market data sources")
+    st.caption(
+        "Regional benchmarks and ETF/index mappings are managed in "
+        "market_sources.json under STOCKFINDER_DATA_DIR. Restart after edits."
+    )
+    st.download_button(
+        "Download market sources",
+        json.dumps(load_market_sources(), indent=2, sort_keys=True) + "\n",
+        "stockfinder-market-sources.json",
+        "application/json",
+    )
 
     st.download_button(
         "Download configuration",
@@ -3493,11 +3519,12 @@ def _selected_points(event: Any) -> list[dict[str, Any]]:
 
 
 def _heading(title: str, subtitle: str) -> None:
+    subtitle_html = f'<p class="subtitle">{subtitle}</p>' if subtitle else ""
     st.markdown(
         f"""
         <div class="eyebrow">DECISION WORKSPACE</div>
         <h1>{title}</h1>
-        <p class="subtitle">{subtitle}</p>
+        {subtitle_html}
         """,
         unsafe_allow_html=True,
     )
@@ -3626,6 +3653,21 @@ def _theme() -> None:
             background: var(--surface);
         }
         hr { border-color: var(--border) !important; }
+        @media (max-width: 640px) {
+            h1 { font-size: 1.7rem !important; }
+            .eyebrow { margin-top: 0.1rem; }
+            .st-key-active_dashboard [data-testid="stButtonGroup"] {
+                margin-bottom: 0.5rem;
+            }
+            .st-key-active_dashboard [data-testid="stButtonGroup"] > div {
+                gap: 0.65rem;
+                flex-wrap: nowrap;
+            }
+            .st-key-active_dashboard button {
+                font-size: 0.82rem !important;
+                padding: 0.35rem 0 0.3rem !important;
+            }
+        }
         </style>
         """,
         unsafe_allow_html=True,

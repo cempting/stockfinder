@@ -11,6 +11,15 @@ from stockfinder.infrastructure.runtime import application_data_dir
 DEFAULT_CONFIG_PATH = Path(__file__).with_name("default_analysis_config.json")
 GEOGRAPHY_DIMENSIONS = ("listing_region", "company_domicile")
 REQUIRED_MARKET_REGIMES = ("defensive", "neutral", "supportive")
+CAPITAL_MOVEMENT_PRESETS = {
+    "Daily": 1,
+    "Weekly": 5,
+    "Monthly": 21,
+}
+DEFAULT_CAPITAL_MOVEMENT = {
+    "period": "Daily",
+    "custom_sessions": 1,
+}
 DEFAULT_ALERT_RULES = {
     "max_position_allocation_pct": 25.0,
     "minimum_position_safety": 40.0,
@@ -24,6 +33,21 @@ DEFAULT_PROFILE_COMPOSITION = {
     "safety_weight": 25.0,
     "fundamental_weight": 20.0,
     "trend_weight": 15.0,
+    "setup_match_mode": "any",
+    "enabled_setup_filters": [
+        "heartbeat_consolidation",
+        "sma50_cross",
+        "rising_sma50",
+        "increasing_volume",
+        "above_sma150",
+    ],
+}
+SETUP_FILTERS = {
+    "heartbeat_consolidation": "Heartbeat consolidation",
+    "sma50_cross": "Recent SMA50 cross",
+    "rising_sma50": "Rising SMA50",
+    "increasing_volume": "Increasing volume",
+    "above_sma150": "Above SMA150",
 }
 PROFILE_COMPOSITION_PRESETS = {
     "Momentum-led": {
@@ -62,6 +86,22 @@ def validate_analysis_config(config: dict[str, Any]) -> None:
     if config.get("geography_dimension") not in GEOGRAPHY_DIMENSIONS:
         raise ValueError(
             "geography_dimension must be listing_region or company_domicile"
+        )
+
+    movement = configured_capital_movement(config)
+    valid_periods = (*CAPITAL_MOVEMENT_PRESETS, "Custom")
+    if movement["period"] not in valid_periods:
+        raise ValueError(
+            "capital_movement.period must be Daily, Weekly, Monthly, or Custom"
+        )
+    custom_sessions = movement["custom_sessions"]
+    if (
+        not isinstance(custom_sessions, int)
+        or isinstance(custom_sessions, bool)
+        or not 1 <= custom_sessions <= 252
+    ):
+        raise ValueError(
+            "capital_movement.custom_sessions must be an integer between 1 and 252"
         )
 
     controls = config.get("market_controls")
@@ -104,6 +144,21 @@ def validate_analysis_config(config: dict[str, Any]) -> None:
             raise ValueError(
                 f"rule_profiles.{name}.weighted_score_enabled must be boolean"
             )
+        if composition["setup_match_mode"] not in {"any", "all"}:
+            raise ValueError(
+                f"rule_profiles.{name}.setup_match_mode must be any or all"
+            )
+        enabled_filters = composition["enabled_setup_filters"]
+        if (
+            not isinstance(enabled_filters, list)
+            or not enabled_filters
+            or any(filter_id not in SETUP_FILTERS for filter_id in enabled_filters)
+            or len(enabled_filters) != len(set(enabled_filters))
+        ):
+            raise ValueError(
+                f"rule_profiles.{name}.enabled_setup_filters must contain "
+                "unique known setup filters"
+            )
         for field in (
             "minimum_weighted_score",
             "setup_weight",
@@ -135,20 +190,13 @@ def validate_analysis_config(config: dict[str, Any]) -> None:
         if not isinstance(value, (int, float)) or not 0 <= value <= 100:
             raise ValueError(f"alert_rules.{field} must be between 0 and 100")
 
-    proxies = config.get("regional_proxies")
-    if not isinstance(proxies, dict) or not proxies:
-        raise ValueError("regional_proxies must contain at least one region")
-    for region, mapping in proxies.items():
-        if not isinstance(mapping, dict) or not str(mapping.get("benchmark", "")):
-            raise ValueError(
-                f"regional_proxies.{region}.benchmark must be a ticker symbol"
-            )
-        if not isinstance(mapping.get("sectors", {}), dict):
-            raise ValueError(f"regional_proxies.{region}.sectors must be an object")
-        if not isinstance(mapping.get("industries", {}), dict):
-            raise ValueError(
-                f"regional_proxies.{region}.industries must be an object"
-            )
+
+def _migrate_analysis_config(config: dict[str, Any]) -> dict[str, Any]:
+    """Remove source data formerly duplicated in strategy configuration."""
+    migrated = deepcopy(config)
+    migrated.pop("regional_proxies", None)
+    migrated.setdefault("capital_movement", deepcopy(DEFAULT_CAPITAL_MOVEMENT))
+    return migrated
 
 
 class AnalysisConfigStore:
@@ -167,13 +215,14 @@ class AnalysisConfigStore:
             return default_analysis_config()
         try:
             config = json.loads(self.path.read_text(encoding="utf-8"))
+            config = _migrate_analysis_config(config)
             validate_analysis_config(config)
             return config
         except (OSError, json.JSONDecodeError, ValueError, TypeError):
             return default_analysis_config()
 
     def save(self, config: dict[str, Any]) -> dict[str, Any]:
-        candidate = deepcopy(config)
+        candidate = _migrate_analysis_config(config)
         validate_analysis_config(candidate)
         temporary = self.path.with_name(f".{self.path.name}.{uuid4().hex}.tmp")
         try:
@@ -200,6 +249,35 @@ def geography_column(config: dict[str, Any]) -> str:
         if config.get("geography_dimension") == "company_domicile"
         else "Region"
     )
+
+
+def configured_capital_movement(config: dict[str, Any]) -> dict[str, Any]:
+    """Return capital-movement settings with defaults for legacy configs."""
+    configured = config.get("capital_movement", {})
+    if not isinstance(configured, dict):
+        raise ValueError("capital_movement must be an object")
+    return {**DEFAULT_CAPITAL_MOVEMENT, **configured}
+
+
+def capital_movement_sessions(config: dict[str, Any]) -> int:
+    """Resolve the configured movement period to completed trading sessions."""
+    movement = configured_capital_movement(config)
+    if movement["period"] == "Custom":
+        return int(movement["custom_sessions"])
+    return CAPITAL_MOVEMENT_PRESETS[str(movement["period"])]
+
+
+def update_capital_movement(
+    config: dict[str, Any], period: str, custom_sessions: int
+) -> dict[str, Any]:
+    """Return validated capital-movement settings without mutating the source."""
+    candidate = deepcopy(config)
+    candidate["capital_movement"] = {
+        "period": period,
+        "custom_sessions": custom_sessions,
+    }
+    validate_analysis_config(candidate)
+    return candidate
 
 
 def update_rule_profile(
@@ -257,18 +335,3 @@ def update_alert_rules(
     candidate["alert_rules"].update(values)
     validate_analysis_config(candidate)
     return candidate
-
-
-def configured_proxy(
-    config: dict[str, Any], region: str, sector: str, industry: str
-) -> tuple[str, str]:
-    """Resolve the most specific configured regional analysis proxy."""
-    regions = config["regional_proxies"]
-    mapping = regions.get(region) or regions.get("Global") or {}
-    industry_symbol = mapping.get("industries", {}).get(industry)
-    if industry_symbol:
-        return str(industry_symbol), "regional industry proxy"
-    sector_symbol = mapping.get("sectors", {}).get(sector)
-    if sector_symbol:
-        return str(sector_symbol), "regional sector proxy"
-    return str(mapping.get("benchmark", "ACWI")), "regional benchmark fallback"

@@ -5,6 +5,14 @@ fundamental and risk evaluation, and technical confirmation.
 
 The product vision and requirements gathered during discovery are documented
 in [docs/product-vision.md](docs/product-vision.md).
+The shared economic and market vocabulary is defined in
+[docs/domain-glossary.md](docs/domain-glossary.md), and the declarative analysis
+language for the redesign is specified in
+[docs/analysis-dsl.md](docs/analysis-dsl.md).
+Confirmed owner decisions and redesign acceptance criteria are recorded in
+[docs/redesign-discovery.md](docs/redesign-discovery.md).
+Current specification and implementation progress is tracked in
+[docs/redesign-status.md](docs/redesign-status.md).
 Package ownership and dependency rules are documented in
 [docs/architecture.md](docs/architecture.md).
 Optional licensed-provider adapters are documented in
@@ -72,6 +80,39 @@ override this with `STOCKFINDER_PROFILE_MAX_AGE_HOURS`. Provider failures are
 retried with smaller batches; unresolved symbols use last-known real data when
 available. Synthetic data is reserved for symbols with no cached or provider
 data.
+
+The cache behaves the same in a local virtual environment and a hosted
+Streamlit process. Point `STOCKFINDER_DATA_DIR` at a writable persistent or
+mounted directory in either environment; otherwise the app uses the repository
+`data/` directory and falls back to the system temporary directory only when it
+is not writable. A normal read uses memory and then Parquet history files before
+contacting the provider. **Refresh selected chart** updates only the selected
+industry proxy or stock. **Refresh now** incrementally updates every cached scan
+symbol, fetches full history for every cache miss, and rebuilds the scan. On
+ephemeral hosts such as Streamlit Community Cloud, files survive reruns but may
+be lost when the app is rebooted or redeployed; the next scan then refetches all
+missing history automatically.
+
+## Market Source Configuration
+
+Reviewable global and regional benchmark, sector, and dedicated industry ETF/index
+sources live in
+`src/stockfinder/infrastructure/default_market_sources.json`. To override them
+without changing application code, create `market_sources.json` under
+`STOCKFINDER_DATA_DIR` with the same structure and restart the app. Every entry
+declares a `symbol` and `kind` (`ETF` or `Index`). Dedicated industry symbols
+must be unique so one instrument cannot silently stand in for several industries.
+The catalog also declares an explicit `Stock` fallback policy for industries that
+do not have a reviewed dedicated fund or index.
+
+The v2 catalog has one `global` block and a `regions.<region>` block for each
+market. Industry charts prefer a regional industry source, then a global industry
+source, and finally the largest-market-cap constituent in that exact regional
+industry. Broader comparisons may continue through the regional sector source and
+regional benchmark. The UI labels each fallback as a representative stock rather
+than an ETF. `analysis_config.json` contains strategy settings only and no longer
+duplicates market symbols. Existing v1 source files and legacy analysis settings
+are migrated when loaded.
 
 ## Broker Tradability
 
@@ -193,7 +234,10 @@ not exhaustive, and instrument availability depends on the user's broker.
 Open **Data controls** in the sidebar to manage broad scans:
 
 - **Refresh now** clears provider and processed-scan caches, reloads exchange
-	membership and price history, and rebuilds all rotation results.
+	membership, incrementally updates cached price history, fetches full history
+	for cache misses, and rebuilds all rotation results.
+- **Refresh selected chart** in Flow Finder bypasses freshness for the selected
+	industry proxy or stock and atomically updates that symbol's history file.
 - **Extended loading** requests two years of history in 100-symbol batches.
 	Standard mode requests one year in 200-symbol batches.
 - The scan status shows membership retrieval, exact processed and usable symbol

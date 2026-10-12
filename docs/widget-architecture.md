@@ -74,7 +74,7 @@ separately rather than hidden in one score.
 
 ### `regional_markets`
 
-Ranks configured regional ETF/index benchmarks by momentum, long-term trend, and
+Ranks cataloged regional ETF/index benchmarks by momentum, long-term trend, and
 relative performance against the global benchmark. Selecting an available region
 updates the shared context used by sector, industry, liquidity, and stock widgets.
 Benchmark evidence is joined to the scan's regional industry breadth, liquidity,
@@ -149,8 +149,8 @@ default stop. These levels are planning aids, not orders.
 
 Compares the linked instrument with up to five stocks from the same listing region
 and industry, ordered by available market capitalization. The benchmark follows
-the configured regional industry, sector, then regional benchmark fallback rather
-than assuming a US index. Six-month price histories are normalized to growth of
+the catalog's regional industry, global industry, regional sector, then regional
+benchmark fallback rather than assuming a US index. Six-month price histories are normalized to growth of
 100, with selected-instrument, benchmark, and relative returns shown separately.
 Missing histories are excluded and the displayed peer count and benchmark source
 make partial coverage explicit. Instruments outside the classified scan universe
